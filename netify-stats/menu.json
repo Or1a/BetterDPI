@@ -1,0 +1,13 @@
+{
+  "admin/status/netify-stats": {
+    "title": "DPI Traffic Analysis",
+    "order": 35,
+    "action": {
+      "type": "view",
+      "path": "status/netify-stats"
+    },
+    "depends": {
+      "acl": [ "luci-app-netify-stats" ]
+    }
+  }
+}

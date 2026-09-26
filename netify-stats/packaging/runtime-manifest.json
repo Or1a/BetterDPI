@@ -1,0 +1,23 @@
+{
+  "netify-stats.init": ["/etc/init.d/netify-stats", "0755"],
+  "packaging/netify-stats.keep": ["/lib/upgrade/keep.d/netify-stats", "0644"],
+  "netify_collector.py": ["/usr/sbin/netify-stats-collector", "0755"],
+  "netify_rpc.py": ["/usr/libexec/rpcd/netify-stats", "0755"],
+  "packaging/post-install": ["/usr/lib/netify-stats/package-post-install", "0755"],
+  "packaging/pre-deinstall": ["/usr/lib/netify-stats/package-pre-deinstall", "0755"],
+  "netify_accounting.py": ["/usr/lib/netify-stats/netify_accounting.py", "0644"],
+  "netify_classify.py": ["/usr/lib/netify-stats/netify_classify.py", "0644"],
+  "netify_control.py": ["/usr/lib/netify-stats/netify_control.py", "0644"],
+  "netify_storage.py": ["/usr/lib/netify-stats/netify_storage.py", "0644"],
+  "netify_proxy.py": ["/usr/lib/netify-stats/netify_proxy.py", "0644"],
+  "netify_query.py": ["/usr/lib/netify-stats/netify_query.py", "0644"],
+  "rules/community-rules.json": ["/usr/share/netify-stats/community-rules.json", "0644"],
+  "rules/COMMUNITY-LICENSE": ["/usr/share/netify-stats/COMMUNITY-LICENSE", "0644"],
+  "rules/NEXTDNS-LICENSE": ["/usr/share/netify-stats/NEXTDNS-LICENSE", "0644"],
+  "LICENSE": ["/usr/share/licenses/luci-app-netify-stats/LICENSE", "0644"],
+  "acl.json": ["/usr/share/rpcd/acl.d/luci-app-netify-stats.json", "0644"],
+  "menu.json": ["/usr/share/luci/menu.d/luci-app-netify-stats.json", "0644"],
+  "netify-stats.js": ["/www/luci-static/resources/view/status/netify-stats.js", "0644"],
+  "i18n/netify-stats.zh-cn.lmo": ["/usr/lib/lua/luci/i18n/netify-stats.zh-cn.lmo", "0644"],
+  "i18n/netify-stats.zh-tw.lmo": ["/usr/lib/lua/luci/i18n/netify-stats.zh-tw.lmo", "0644"]
+}

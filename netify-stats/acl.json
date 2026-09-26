@@ -1,0 +1,11 @@
+{
+  "luci-app-netify-stats": {
+    "description": "访问本地 Netify DPI 流量统计",
+    "read": {
+      "ubus": {
+        "netify-stats": [ "summary" ]
+      }
+    },
+    "write": { "ubus": { "netify-stats": [ "set_storage", "set_enabled", "set_interface" ] } }
+  }
+}

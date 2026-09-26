@@ -1,0 +1,350 @@
+# Netify Stats UI translations. Project licensing remains pending.
+msgid ""
+msgstr ""
+"Project-Id-Version: netify-stats 0.2.8-dev\n"
+"PO-Revision-Date: 2026-09-26 00:00+0000\n"
+"Last-Translator: Netify Stats contributors\n"
+"Language-Team: zh_Hans\n"
+"Language: zh_Hans\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+#, c-format
+msgid "Download %s, upload %s"
+msgstr "下载 %s，上传 %s"
+
+#, c-format
+msgid "Download %s · Upload %s"
+msgstr "下载 %s · 上传 %s"
+
+#, c-format
+msgid "Requested: %s; actual: %s. %s"
+msgstr "目标：%s；实际：%s。%s"
+
+msgid "Enabled"
+msgstr "开启"
+
+msgid "Disabled"
+msgstr "关闭"
+
+msgid "The setting has not been fully applied."
+msgstr "设置尚未完整应用。"
+
+#, c-format
+msgid "%s (currently unavailable)"
+msgstr "%s（当前不可用）"
+
+#, c-format
+msgid "Could not save the interface: %s"
+msgstr "接口保存失败：%s"
+
+msgid "Statistics interface"
+msgstr "统计接口"
+
+#, c-format
+msgid "Bound interface: %s"
+msgstr "已绑定：%s"
+
+msgid "No interface is bound"
+msgstr "尚未绑定接口"
+
+#, c-format
+msgid "%s of traffic could not be attributed to devices during this collection session. Historical statistics are incomplete."
+msgstr "本轮采集累计有 %s 流量未能归属到设备，相关历史统计不完整。"
+
+#, c-format
+msgid "Current record storage: %s (including database and journal)"
+msgstr "当前记录占用 %s（含数据库与日志）"
+
+#, c-format
+msgid "Could not save: %s"
+msgstr "保存失败：%s"
+
+msgid "Record limit (MiB)"
+msgstr "记录上限（MiB）"
+
+msgid "Download"
+msgstr "下载"
+
+msgid "Upload"
+msgstr "上传"
+
+msgid "No attributable data"
+msgstr "暂无可归属的数据"
+
+msgid "No data yet. Netify is identifying new connections."
+msgstr "尚无数据，Netify 正在识别新连接。"
+
+msgid "Devices generating this traffic"
+msgstr "由哪些设备产生"
+
+msgid "Websites / services"
+msgstr "访问的网站 / 服务"
+
+msgid "Loading details…"
+msgstr "正在加载详情…"
+
+msgid "Previous"
+msgstr "上一页"
+
+msgid "Next"
+msgstr "下一页"
+
+msgid "Application ranking pages"
+msgstr "应用排行分页"
+
+msgid "No device data"
+msgstr "暂无设备数据"
+
+msgid "No trend data"
+msgstr "暂无趋势数据"
+
+msgid "Running"
+msgstr "仍在运行"
+
+msgid "Stopped"
+msgstr "已停止"
+
+msgid "Some services are running"
+msgstr "部分服务在运行"
+
+msgid "Not bound"
+msgstr "未绑定"
+
+msgid "Confirm and save"
+msgstr "确定保存"
+
+msgid "Interface traffic"
+msgstr "接口流量"
+
+msgid "Receive RX"
+msgstr "接收 RX"
+
+msgid "Transmit TX"
+msgstr "发送 TX"
+
+msgid "The interface was reset. Traffic during the reset could not be fully measured."
+msgstr "接口曾重置，重置期间无法完整计量。"
+
+msgid "No records for this interface"
+msgstr "该接口暂无记录"
+
+msgid "Select an interface to measure"
+msgstr "请选择统计接口"
+
+msgid "Device traffic trend"
+msgstr "设备流量趋势"
+
+msgid "Community rules could not be loaded. Showing domains instead."
+msgstr "社区规则加载失败，暂按域名展示。"
+
+msgid "Collection is temporarily unavailable. Showing historical data."
+msgstr "采集暂不可用，当前显示历史数据。"
+
+msgid "Proxy connection attribution failed. Some device statistics may be incomplete."
+msgstr "代理连接归属失败，部分设备统计可能不完整。"
+
+msgid "Connection metadata recovery failed. Some device or application statistics may be incomplete."
+msgstr "连接信息恢复失败，部分设备或应用统计可能不完整。"
+
+msgid "Device download"
+msgstr "设备下载"
+
+msgid "Device upload"
+msgstr "设备上传"
+
+msgid "Internet → device"
+msgstr "互联网 → 设备"
+
+msgid "Device → Internet"
+msgstr "设备 → 互联网"
+
+msgid "Interface counters are temporarily unavailable."
+msgstr "接口计数暂不可用。"
+
+msgid "Statistics storage maintenance failed. Check the capacity setting and available space."
+msgstr "统计存储维护异常，请检查容量设置及可用空间。"
+
+msgid "Application and website ranking"
+msgstr "应用与网站排行"
+
+msgid "Device ranking"
+msgstr "设备排行"
+
+msgid "Device ranking pages"
+msgstr "设备排行分页"
+
+msgid "Refresh failed. The previous results have been kept. Please try again."
+msgstr "刷新失败，已保留上次结果。请稍后重试。"
+
+msgid "All devices"
+msgstr "全部设备"
+
+msgid "Time range"
+msgstr "时间范围"
+
+msgid "All"
+msgstr "全部"
+
+msgid "Last 1 hour"
+msgstr "最近1小时"
+
+msgid "Last 5 hours"
+msgstr "最近5小时"
+
+msgid "Last 24 hours"
+msgstr "最近24小时"
+
+msgid "Last 7 days"
+msgstr "最近7天"
+
+msgid "Device"
+msgstr "设备"
+
+msgid "Sort by"
+msgstr "排序依据"
+
+msgid "Total traffic"
+msgstr "总流量"
+
+msgid "Connections"
+msgstr "连接数"
+
+msgid "Order"
+msgstr "顺序"
+
+msgid "Highest first"
+msgstr "从高到低"
+
+msgid "Lowest first"
+msgstr "从低到高"
+
+msgid "Refresh"
+msgstr "刷新"
+
+msgid "DPI Traffic Analysis"
+msgstr "DPI 流量分析"
+
+msgid "Traffic analysis"
+msgstr "流量分析"
+
+msgid "Retry applying"
+msgstr "重试应用"
+
+msgid "Record storage limit in MiB"
+msgstr "记录容量上限 MiB"
+
+msgid "Enter 0 (unlimited) or an integer from 4 to 4096 MiB."
+msgstr "请输入 0（不限）或 4–4096 MiB 的整数。"
+
+msgid "When the storage limit is reached, the oldest hours of statistics will be deleted first. Save this setting?"
+msgstr "达到容量上限时，将按最早小时优先删除统计记录。保存此设置？"
+
+msgid "The server did not confirm the saved value. Refresh and try again."
+msgstr "服务器未确认保存值，请刷新后重试"
+
+msgid "Saved. The collector will apply the setting automatically."
+msgstr "已保存；采集器会自动应用。"
+
+msgid "Save storage setting"
+msgstr "保存容量设置"
+
+msgid "Storage settings"
+msgstr "存储设置"
+
+msgid "0 means unlimited. At the limit, the oldest hours are removed first. Writes may temporarily exceed the limit. Records stay in memory and are cleared on reboot; the capacity setting is kept."
+msgstr "0 为不限；达到上限按最早小时淘汰。写入时可能短暂超出。记录仍在内存，重启清空；容量设置会保留。"
+
+msgid "Capacity must be 0 (unlimited) or an integer from 4 to 4096 MiB"
+msgstr "容量必须为 0（不限）或 4–4096 MiB 的整数"
+
+msgid "Settings are being saved. Please try again."
+msgstr "设置正在保存，请稍后重试"
+
+msgid "Statistics migration verification failed; original data was preserved."
+msgstr "统计迁移校验失败，已保留原数据"
+
+msgid "Storage cleanup is waiting for active queries to finish."
+msgstr "日志被读取占用，容量回收等待查询结束"
+
+msgid "Storage cleanup is not finished; oldest hours will continue to be removed."
+msgstr "容量回收尚未完成，将继续按最早小时清理"
+
+msgid "Analysis toggle timed out. Please try again."
+msgstr "开关操作超时，请重试"
+
+msgid "Services did not fully start. Please try again."
+msgstr "服务未完整启动，请重试"
+
+msgid "Services did not fully stop. Please try again."
+msgstr "服务未完整停止，请重试"
+
+msgid "Another analysis toggle is in progress. Please try again."
+msgstr "已有开关操作正在执行，请稍后重试"
+
+msgid "Select an interface that exists on this device."
+msgstr "请选择当前设备上存在的接口"
+
+msgid "Invalid enabled setting"
+msgstr "分析开关设置无效"
+
+msgid "enabled must be boolean"
+msgstr "分析开关必须为开启或关闭"
+
+msgid "Invalid interface setting"
+msgstr "接口设置无效"
+
+msgid "Invalid interface name"
+msgstr "接口名称无效"
+
+msgid "Negative interface counter"
+msgstr "接口计数不能为负数"
+
+msgid "Unknown destination"
+msgstr "未识别目标"
+
+msgid "Douyin"
+msgstr "抖音"
+
+msgid "WeChat"
+msgstr "微信"
+
+msgid "Tencent"
+msgstr "腾讯"
+
+msgid "Bilibili"
+msgstr "哔哩哔哩"
+
+msgid "Huawei"
+msgstr "华为"
+
+msgid "Xiaomi"
+msgstr "小米"
+
+msgid "JD.com"
+msgstr "京东"
+
+msgid "Taobao"
+msgstr "淘宝"
+
+msgid "Native Netify classification"
+msgstr "Netify 原生识别"
+
+msgid "Community domain rules"
+msgstr "社区域名规则"
+
+msgid "Domain only"
+msgstr "仅识别域名"
+
+msgid "Unidentified"
+msgstr "未识别"
+
+#, c-format
+msgid "%s (%s)"
+msgstr "%s（%s）"
+
+#, c-format
+msgid "Analysis setting could not be fully applied: %s"
+msgstr "开关尚未完整应用，请重试：%s"

@@ -1,0 +1,12 @@
+#!/bin/sh
+[ -n "$IPKG_INSTROOT" ] && exit 0
+ns_root=''
+ns_service="$ns_root/etc/init.d/netify-stats"
+if [ -x "$ns_service" ]; then
+    "$ns_service" stop || {
+        echo 'netify-stats: collector stop failed; removal aborted.' >&2
+        exit 1
+    }
+    "$ns_service" disable || exit 1
+fi
+exit 0

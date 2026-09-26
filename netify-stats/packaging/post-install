@@ -1,0 +1,67 @@
+#!/bin/sh
+[ -n "$IPKG_INSTROOT" ] && exit 0
+ns_root=''
+ns_service="$ns_root/etc/init.d/netify-stats"
+
+# Read the saved target without changing Netify's own settings or services.
+# Code 3 means intentionally disabled; code 4 means prerequisites are missing.
+"$ns_root/usr/bin/python3" - "$ns_root" <<'PY'
+import configparser
+import re
+import sys
+from pathlib import Path
+
+root = sys.argv[1]
+sys.path.insert(0, root + '/usr/lib/netify-stats')
+import netify_storage
+if root:
+    netify_storage.CONFIG_PATH = root + '/etc/netify-stats.json'
+if not netify_storage.read_enabled():
+    sys.exit(3)
+
+config = configparser.ConfigParser(interpolation=None, strict=False,
+                                 inline_comment_prefixes=('#', ';'))
+try:
+    with open(root + '/etc/netifyd.conf') as handle:
+        config.read_file(handle)
+    paths = config.items('socket')
+    socket_ok = any(re.fullmatch(r'listen_path\[\d+\]', key) and
+                    value.strip().strip('\"\'') == '/var/run/netifyd/netifyd.sock'
+                    for key, value in paths)
+    required = (('netifyd', 'upload_nat_flows'), ('netifyd', 'export_json'),
+                ('socket', 'dump_unknown_flows'))
+    missing = [section + '.' + key for section, key in required
+               if not config.getboolean(section, key, fallback=False)]
+    if not socket_ok:
+        missing.append('socket.listen_path')
+    if config.getboolean('netifyd', 'enable_sink', fallback=True):
+        missing.append('netifyd.enable_sink=no')
+except (OSError, ValueError, configparser.Error):
+    missing = ['valid /etc/netifyd.conf']
+if missing:
+    print('netify-stats: configure Netify prerequisites before enabling: ' +
+          ', '.join(missing), file=sys.stderr)
+    sys.exit(4)
+if not Path(root + '/var/run/netifyd/netifyd.sock').is_socket():
+    print('netify-stats: Netify local socket is not ready; the collector will wait.',
+          file=sys.stderr)
+PY
+ns_status=$?
+case "$ns_status" in
+    0|3|4) ;;
+    *) echo 'netify-stats: cannot read saved settings; installation hook failed.' >&2; exit 1 ;;
+esac
+
+# Explicitly replace the running interpreter on upgrade, even when procd sees
+# identical command arguments. A failed stop must not start a second instance.
+"$ns_service" stop || exit 1
+if [ "$ns_status" -eq 0 ]; then
+    "$ns_service" enable || exit 1
+    "$ns_service" start || exit 1
+else
+    "$ns_service" disable || exit 1
+fi
+"$ns_root/etc/init.d/rpcd" restart >/dev/null 2>&1 || {
+    echo 'netify-stats: rpcd reload failed; refresh its service before using the page.' >&2
+}
+exit 0
