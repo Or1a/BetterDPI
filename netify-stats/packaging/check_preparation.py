@@ -45,6 +45,7 @@ def check(root=ROOT):
                 if name and name.startswith('netify_'):
                     assert name in trees, module+' imports uninstalled module '+name
     assert not re.search(r'^PKG_BUILD_DEPENDS\s*[:+]?=', recipe, re.M), 'Pure-data package should not rebuild host dependencies'
+    assert re.search(r'^define Build/Compile\n\s*:\s*\nendef$', recipe, re.M), 'Pure-data package must override the default source compiler'
     for name, source in CATALOG_SOURCES.items():
         assert (root/source).is_file(), 'Missing translation source: '+source
         assert (root/'i18n'/name).stat().st_size > 0, 'Missing precompiled translation: '+name

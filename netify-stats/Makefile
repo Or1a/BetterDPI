@@ -29,6 +29,10 @@ define Build/Prepare
 	mkdir -p $(PKG_BUILD_DIR)
 endef
 
+define Build/Compile
+	:
+endef
+
 define Package/luci-app-netify-stats/install
 	$(INSTALL_DIR) $(1)/etc/init.d $(1)/usr/sbin $(1)/usr/lib/netify-stats
 	$(INSTALL_DIR) $(1)/lib/upgrade/keep.d
