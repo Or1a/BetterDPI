@@ -8,7 +8,6 @@ PKG_LICENSE:=GPL-3.0-only
 PKG_LICENSE_FILES:=LICENSE
 PKG_MAINTAINER:=Netify Stats contributors
 PKGARCH:=all
-PKG_BUILD_DEPENDS:=luci-base/host
 
 include $(INCLUDE_DIR)/package.mk
 
@@ -28,11 +27,6 @@ endef
 
 define Build/Prepare
 	mkdir -p $(PKG_BUILD_DIR)
-endef
-
-define Build/Compile
-	$(STAGING_DIR_HOSTPKG)/bin/po2lmo ./po/zh_Hans/netify-stats.po $(PKG_BUILD_DIR)/netify-stats.zh-cn.lmo
-	$(STAGING_DIR_HOSTPKG)/bin/po2lmo ./po/zh_Hant/netify-stats.po $(PKG_BUILD_DIR)/netify-stats.zh-tw.lmo
 endef
 
 define Package/luci-app-netify-stats/install
@@ -55,7 +49,7 @@ define Package/luci-app-netify-stats/install
 	$(INSTALL_DATA) ./acl.json $(1)/usr/share/rpcd/acl.d/luci-app-netify-stats.json
 	$(INSTALL_DATA) ./menu.json $(1)/usr/share/luci/menu.d/luci-app-netify-stats.json
 	$(INSTALL_DATA) ./netify-stats.js $(1)/www/luci-static/resources/view/status/netify-stats.js
-	$(INSTALL_DATA) $(PKG_BUILD_DIR)/netify-stats.zh-cn.lmo $(PKG_BUILD_DIR)/netify-stats.zh-tw.lmo $(1)/usr/lib/lua/luci/i18n/
+	$(INSTALL_DATA) ./i18n/netify-stats.zh-cn.lmo ./i18n/netify-stats.zh-tw.lmo $(1)/usr/lib/lua/luci/i18n/
 endef
 
 define Package/luci-app-netify-stats/postinst

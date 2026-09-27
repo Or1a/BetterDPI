@@ -18,17 +18,7 @@ def check(root=ROOT):
     manifest = json.loads((root/'packaging/runtime-manifest.json').read_text())
     recipe = (root/'Makefile').read_text()
     installed = {}
-    compiled_catalogs = {}
     for line in recipe.splitlines():
-        compiler = re.match(r'\s*\$\(STAGING_DIR_HOSTPKG\)/bin/po2lmo (.+)$', line)
-        if compiler:
-            tokens = shlex.split(compiler[1])
-            assert len(tokens) == 2, 'Unexpected translation compiler arguments'
-            po_source, output = tokens
-            assert output.startswith('$(PKG_BUILD_DIR)/'), 'Translation must compile in build directory'
-            name = output.removeprefix('$(PKG_BUILD_DIR)/')
-            assert name not in compiled_catalogs, 'Duplicate compiled translation: '+name
-            compiled_catalogs[name] = po_source.removeprefix('./')
         match = re.match(r'\s*\$\(INSTALL_(BIN|DATA)\) (.+)$', line)
         if not match:
             continue
@@ -36,10 +26,6 @@ def check(root=ROOT):
         target = tokens[-1].replace('$(1)', '')
         for source in tokens[:-1]:
             source = source.removeprefix('./')
-            if source.startswith('$(PKG_BUILD_DIR)/'):
-                name = source.removeprefix('$(PKG_BUILD_DIR)/')
-                assert name in CATALOG_SOURCES, 'Unexpected generated payload: '+name
-                source = 'i18n/'+name
             destination = target + Path(source).name if target.endswith('/') else target
             assert source not in installed, 'Duplicate install: '+source
             installed[source] = [destination, '0755' if match[1] == 'BIN' else '0644']
@@ -58,11 +44,10 @@ def check(root=ROOT):
             for name in imported:
                 if name and name.startswith('netify_'):
                     assert name in trees, module+' imports uninstalled module '+name
-    assert compiled_catalogs == CATALOG_SOURCES, 'Translation compilation differs from catalog sources'
-    host_dependencies = re.search(r'^PKG_BUILD_DEPENDS\s*[:+]?=(.+)$', recipe, re.M)
-    assert host_dependencies and 'luci-base/host' in host_dependencies[1].split(), 'Missing LuCI host translation compiler'
+    assert not re.search(r'^PKG_BUILD_DEPENDS\s*[:+]?=', recipe, re.M), 'Pure-data package should not rebuild host dependencies'
     for name, source in CATALOG_SOURCES.items():
         assert (root/source).is_file(), 'Missing translation source: '+source
+        assert (root/'i18n'/name).stat().st_size > 0, 'Missing precompiled translation: '+name
         assert 'i18n/'+name in manifest, 'Compiled translation missing from runtime manifest: '+name
     public_sources = (root/'packaging/source-files.txt').read_text().splitlines()
     assert len(public_sources) == len(set(public_sources)), 'Duplicate public source'
