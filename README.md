@@ -17,3 +17,23 @@
 - 可暂停或恢复流量分析，暂停时保留已有历史数据。
 - 跟随 LuCI 的英文、简体中文或繁体中文语言设置。
 - 使用社区分类规则补充 Netify 的原生识别，并保留规则来源信息。
+
+## Command-line download
+
+Run the command matching your router's OpenWrt version. It downloads the package to `/tmp` and verifies its SHA-256 checksum; it does not install anything.
+
+OpenWrt 24.10.8 (IPK):
+
+```sh
+wget -O /tmp/BetterDPI-0.2.8-openwrt-24.10.8-all.ipk 'https://github.com/Or1a/BetterDPI/releases/download/V0.2.8/BetterDPI-0.2.8-openwrt-24.10.8-all.ipk' && echo 'fa2cf07d645c741b79ca9b823c3ea96138bbf7b5a4fe2cd6a7d30f72c7bc4380  /tmp/BetterDPI-0.2.8-openwrt-24.10.8-all.ipk' | sha256sum -c -
+```
+
+OpenWrt 25.12.5 (APK):
+
+```sh
+wget -O /tmp/BetterDPI-0.2.8-openwrt-25.12.5-all.apk 'https://github.com/Or1a/BetterDPI/releases/download/V0.2.8/BetterDPI-0.2.8-openwrt-25.12.5-all.apk' && echo '5de4bbd7c31b0d6d9a116e71e4a8d00e6d2aa756558339a6688869a7b3bf7106  /tmp/BetterDPI-0.2.8-openwrt-25.12.5-all.apk' | sha256sum -c -
+```
+
+## 命令行下载
+
+在对应版本的 OpenWrt 路由器上运行上方的一条命令。安装包会下载到 `/tmp` 并校验 SHA-256；命令不会自动安装。
