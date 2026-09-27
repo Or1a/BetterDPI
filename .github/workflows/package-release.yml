@@ -76,6 +76,7 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           pattern: openwrt-*
@@ -92,3 +93,9 @@ jobs:
             --title "BetterDPI ${GITHUB_REF_NAME}" \
             --notes 'OpenWrt 24.10.8: IPK; OpenWrt 25.12.5: APK. Pure-Python/LuCI package (architecture all). Requires a separately configured Netifyd local flow socket. Statistics remain in /tmp and are lost on reboot.' \
             --prerelease
+          # A marker visible over the existing SSH deploy key is written only
+          # after both assets and their checksums have been accepted by GitHub.
+          git -C "$GITHUB_WORKSPACE" -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            tag -a "published-${GITHUB_REF_NAME}" -m "$(cat SHA256SUMS)"
+          git -C "$GITHUB_WORKSPACE" push origin "published-${GITHUB_REF_NAME}"
