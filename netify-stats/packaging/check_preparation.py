@@ -103,4 +103,4 @@ def check(root=ROOT):
 if __name__ == '__main__':
     print(json.dumps(check(), ensure_ascii=False))
     if '--release' in sys.argv:
-        raise SystemExit('Release blocked: late-proxy attribution and SDK/lifecycle validation are pending; see RELEASE-PREPARATION.md')
+        raise SystemExit('Stable release blocked: SDK/lifecycle validation is pending; see RELEASE-PREPARATION.md')

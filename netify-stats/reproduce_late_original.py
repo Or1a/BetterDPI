@@ -1,8 +1,7 @@
-"""Known release blocker: original TCP metadata precedes its REDIRECT map.
+"""Regression: original TCP metadata precedes its REDIRECT map.
 
 Run: python3 netify-stats/reproduce_late_original.py
-This standalone reproducer intentionally exits 1 while the bug remains. It is
-not an expectedFailure or part of the passing regression suite. No router is
+This standalone reproducer exits nonzero on a duplicate count. No router is
 contacted; all writes are confined to a temporary database that is removed.
 """
 import json

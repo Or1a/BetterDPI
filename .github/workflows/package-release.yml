@@ -1,0 +1,94 @@
+name: Build OpenWrt packages
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - openwrt: '24.10.8'
+            sdk: openwrt-sdk-24.10.8-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+            sha256: ac4a0405d2eea821b06f93c14ba13ffa90ad0457648903df7dde02570027ab21
+            extension: ipk
+          - openwrt: '25.12.5'
+            sdk: openwrt-sdk-25.12.5-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst
+            sha256: 0c8df0151a1e88feb7c03d694d61f6a18d51872815b7c811d76e2b77504d5e9c
+            extension: apk
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check source and regressions
+        run: |
+          python3 netify-stats/packaging/check_preparation.py
+          python3 -m unittest discover -s netify-stats -p 'test_*.py'
+          python3 netify-stats/reproduce_late_original.py
+          for test in test_i18n_ui.cjs test_interface_ui.cjs test_logic.cjs test_settings_ui.cjs test_ui_helpers.cjs; do
+            node "netify-stats/$test"
+          done
+      - name: Download verified OpenWrt SDK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zstd
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/${{ matrix.sdk }}" \
+            "https://downloads.openwrt.org/releases/${{ matrix.openwrt }}/targets/x86/64/${{ matrix.sdk }}"
+          echo '${{ matrix.sha256 }}  '"$RUNNER_TEMP/${{ matrix.sdk }}" | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/sdk"
+          tar -I zstd -xf "$RUNNER_TEMP/${{ matrix.sdk }}" -C "$RUNNER_TEMP/sdk"
+      - name: Build package with matching SDK
+        run: |
+          sdk_dir=$(find "$RUNNER_TEMP/sdk" -mindepth 1 -maxdepth 1 -type d -print -quit)
+          test -n "$sdk_dir"
+          package_dir="$sdk_dir/package/luci-app-netify-stats"
+          mkdir -p "$package_dir"
+          while IFS= read -r source; do
+            test -n "$source" || continue
+            mkdir -p "$package_dir/$(dirname "$source")"
+            cp "netify-stats/$source" "$package_dir/$source"
+          done < netify-stats/packaging/source-files.txt
+          cd "$sdk_dir"
+          ./scripts/feeds update -a
+          ./scripts/feeds install luci-base netifyd
+          make defconfig
+          make package/luci-app-netify-stats/compile V=s -j2
+          package=$(find bin/packages -type f -name 'luci-app-netify-stats_*.${{ matrix.extension }}' -print -quit)
+          test -n "$package"
+          mkdir -p "$GITHUB_WORKSPACE/release"
+          cp "$package" "$GITHUB_WORKSPACE/release/BetterDPI-0.2.8-openwrt-${{ matrix.openwrt }}-all.${{ matrix.extension }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-${{ matrix.openwrt }}
+          path: release/*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: openwrt-*
+          path: release
+          merge-multiple: true
+      - name: Add checksums and publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cd release
+          sha256sum BetterDPI-* > SHA256SUMS
+          gh release create "${GITHUB_REF_NAME}" BetterDPI-* SHA256SUMS \
+            --title "BetterDPI ${GITHUB_REF_NAME}" \
+            --notes 'OpenWrt 24.10.8: IPK; OpenWrt 25.12.5: APK. Pure-Python/LuCI package (architecture all). Requires a separately configured Netifyd local flow socket. Statistics remain in /tmp and are lost on reboot.' \
+            --prerelease

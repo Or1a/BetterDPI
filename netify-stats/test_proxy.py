@@ -84,6 +84,52 @@ class ProxyTest(unittest.TestCase):
             mapping.lookup({'ip_protocol': 6})
             refresh.assert_called_once()
 
+    def test_original_metadata_before_redirect_map_does_not_double_count(self):
+        line = ('ipv4 2 tcp 6 100 src=10.1.1.2 dst=203.0.113.4 '
+                'sport=12345 dport=443 src=10.1.1.1 dst=10.1.1.2 '
+                'sport=7892 dport=12345')
+        original = dict(self.metadata('original')['flow'], ip_protocol=6,
+                        local_port=12345, other_port=443,
+                        other_mac='aa:aa:aa:aa:aa:aa')
+        translated = dict(original, digest='redirect', other_ip='10.1.1.1',
+                          other_port=7892, other_type='local')
+        with self.collector() as instance:
+            instance.update_metadata({'interface': 'br-lan', 'internal': True,
+                                      'flow': original})
+            instance.proxy.entries = dict(RedirectMap.parse(line, {7892}))
+            instance.update_metadata({'interface': 'br-lan', 'internal': True,
+                                      'flow': translated})
+            instance.add_stats(self.stats('original'))
+            instance.add_stats(self.stats('redirect'))
+            self.assertEqual(instance.db.execute(
+                'SELECT SUM(upload), SUM(download), SUM(flows) FROM hourly'
+            ).fetchone(), (100, 200, 1))
+
+    def test_original_counters_before_redirect_map_are_corrected(self):
+        line = ('ipv4 2 tcp 6 100 src=10.1.1.2 dst=203.0.113.4 '
+                'sport=12345 dport=443 src=10.1.1.1 dst=10.1.1.2 '
+                'sport=7892 dport=12345')
+        original = dict(self.metadata('original')['flow'], ip_protocol=6,
+                        local_port=12345, other_port=443,
+                        other_mac='aa:aa:aa:aa:aa:aa')
+        translated = dict(original, digest='redirect', other_ip='10.1.1.1',
+                          other_port=7892, other_type='local')
+        with self.collector() as instance:
+            instance.update_metadata({'interface': 'br-lan', 'internal': True,
+                                      'flow': original})
+            instance.add_stats(self.stats('original'))
+            self.assertEqual(instance.db.execute(
+                'SELECT SUM(upload), SUM(download), SUM(flows) FROM hourly'
+            ).fetchone(), (100, 200, 1))
+            instance.proxy.entries = dict(RedirectMap.parse(line, {7892}))
+            instance.update_metadata({'interface': 'br-lan', 'internal': True,
+                                      'flow': translated})
+            instance.add_stats(self.stats('redirect'))
+            self.assertEqual(instance.db.execute(
+                'SELECT SUM(upload), SUM(download), SUM(flows) FROM hourly'
+            ).fetchone(), (100, 200, 1))
+            self.assertEqual(instance.upload, 100)
+
     def test_late_redirect_mapping_recovers_both_orientations_without_export(self):
         line = 'ipv4 2 tcp 6 100 src=10.1.1.2 dst=203.0.113.4 sport=12345 dport=443 src=10.1.1.1 dst=10.1.1.2 sport=7892 dport=12345'
         entries = dict(RedirectMap.parse(line, {7892}))

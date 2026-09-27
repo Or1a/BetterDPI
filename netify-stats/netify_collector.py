@@ -67,6 +67,9 @@ class Collector:
         self.pending_by_digest = {}
         self.pending_sequence = 0
         self.waiting_metadata = OrderedDict()
+        # Short-lived TCP candidates allow a late REDIRECT map to correct
+        # counters already recorded for the original leg.
+        self.original_candidates = OrderedDict()
         self.missing_metadata = 0
         self.recovered_stats = 0
         self.unattributed_upload = 0
@@ -118,6 +121,12 @@ class Collector:
             "protocol": protocol,
             "host": host.lower(),
             "redirect": redirect,
+            # An original TCP leg can precede its conntrack REDIRECT entry.
+            # Retain only its tuple so counters can re-check attribution when
+            # they arrive; the first export must not permanently classify it.
+            "proxy_probe": {key: flow.get(key) for key in (
+                'ip_protocol', 'local_ip', 'local_port', 'other_ip', 'other_port')}
+                if redirect is None and flow.get('ip_protocol') == 6 else None,
         }
 
     def update_metadata(self, message):
@@ -160,7 +169,51 @@ class Collector:
             elif key not in old:
                 old[key] = value
         self.flows[digest] = old
+        probe = old.get('proxy_probe')
+        if probe and all(probe.get(key) is not None for key in (
+                'ip_protocol', 'local_ip', 'local_port', 'other_ip', 'other_port')):
+            identity = (probe['ip_protocol'], probe['local_ip'],
+                        probe['local_port'], probe['other_ip'], probe['other_port'])
+            key = (digest[0], identity)
+            candidate = self.original_candidates.get(key)
+            if candidate is None or candidate['digest'] != digest:
+                candidate = {'digest': digest, 'entries': {}, 'last': int(time.time())}
+            candidate['last'] = int(time.time())
+            self.original_candidates[key] = candidate
+            self.original_candidates.move_to_end(key)
+            self.expire_original_candidates()
+        if old.get('redirect'):
+            self.reconcile_original(digest[0], old['redirect']['connection'])
         self.replay_pending(digest)
+
+    def expire_original_candidates(self):
+        cutoff = int(time.time()) - PENDING_TTL
+        while self.original_candidates:
+            key, candidate = next(iter(self.original_candidates.items()))
+            if len(self.original_candidates) <= PENDING_LIMIT and candidate['last'] >= cutoff:
+                break
+            self.original_candidates.popitem(last=False)
+
+    def reconcile_original(self, interface, connection):
+        self.expire_original_candidates()
+        candidate = self.original_candidates.pop((interface, connection), None)
+        if candidate is None:
+            return
+        original = self.flows.get(candidate['digest'])
+        if original:
+            # A subsequent socket delta must use the now-known mapping too.
+            original['redirect'] = {'role': 'original', 'local_client': True,
+                                    'connection': connection}
+            original['proxy_probe'] = None
+        for row, (upload, flow_inc) in candidate['entries'].items():
+            bucket = row[0]
+            seen = self.seen.setdefault(bucket, set())
+            connection_key = (interface, connection)
+            duplicate_flow = flow_inc if connection_key in seen else 0
+            seen.add(connection_key)
+            if upload or duplicate_flow:
+                record_hourly(self.db, (*row, -upload, 0, -duplicate_flow))
+                self.upload -= upload
 
     def pop_pending(self, sequence):
         item = self.pending_stats.pop(sequence)
@@ -220,6 +273,12 @@ class Collector:
                 self.missing_metadata += 1
                 self.queue_pending(message, now, upload, download)
             return
+        if meta.get('proxy_probe'):
+            late_redirect = self.proxy.lookup(meta['proxy_probe'])
+            if late_redirect:
+                self.reconcile_original(digest[0], late_redirect['connection'])
+                meta['redirect'] = late_redirect
+                meta['proxy_probe'] = None
         redirect = meta.get('redirect')
         if redirect:
             # REDIRECT is captured before destination translation on replies
@@ -251,6 +310,19 @@ class Collector:
         seen_key = (message.get('interface', ''), redirect['connection']) if redirect else digest
         flow_inc = 0 if seen_key in seen else 1
         seen.add(seen_key)
+        if not redirect and meta.get('proxy_probe'):
+            probe = meta['proxy_probe']
+            identity = (probe['ip_protocol'], probe['local_ip'], probe['local_port'],
+                        probe['other_ip'], probe['other_port'])
+            candidate = self.original_candidates.get((digest[0], identity))
+            if candidate and candidate['digest'] == digest:
+                candidate['last'] = now
+                self.original_candidates.move_to_end((digest[0], identity))
+                row = (bucket, meta['mac'], meta['ip'], meta['application'],
+                       meta['protocol'], meta['host'])
+                previous_upload, previous_flow = candidate['entries'].get(row, (0, 0))
+                candidate['entries'][row] = (previous_upload + upload,
+                                             previous_flow + flow_inc)
         record_hourly(self.db,
             (
                 bucket,
