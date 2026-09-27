@@ -59,7 +59,7 @@ jobs:
           ./scripts/feeds install luci-base netifyd
           make defconfig
           make package/luci-app-netify-stats/compile V=s -j2
-          package=$(find bin/packages -type f -name 'luci-app-netify-stats_*.${{ matrix.extension }}' -print -quit)
+          package=$(find bin/packages -type f -name 'luci-app-netify-stats*.${{ matrix.extension }}' -print -quit)
           test -n "$package"
           mkdir -p "$GITHUB_WORKSPACE/release"
           cp "$package" "$GITHUB_WORKSPACE/release/BetterDPI-0.2.8-openwrt-${{ matrix.openwrt }}-all.${{ matrix.extension }}"
