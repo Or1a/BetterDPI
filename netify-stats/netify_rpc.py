@@ -13,7 +13,7 @@ from netify_control import set_enabled, control_status
 from netify_query import aggregate
 from netify_accounting import interface_choices, selected_interface, save_interface, active_interfaces
 
-VERSION = "0.2.8-dev"
+VERSION = "0.2.8"
 
 
 DB_PATH = "/tmp/netify-stats/stats.db"

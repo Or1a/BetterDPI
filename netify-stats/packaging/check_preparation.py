@@ -63,7 +63,8 @@ def check(root=ROOT):
     version = next(ast.literal_eval(node.value) for node in trees['netify_rpc'].body
         if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'VERSION' for t in node.targets))
     package_version = re.search(r'^PKG_VERSION:=(.+)$', recipe, re.M)[1]
-    assert version == package_version+'-dev', 'Development recipe/runtime version mismatch'
+    assert version == package_version, 'Recipe/runtime version mismatch'
+    assert re.search(r'^PKG_RELEASE:=1$', recipe, re.M), 'Expected first published package revision'
     assert re.search(r'^PKG_LICENSE:=GPL-3\.0-only$', recipe, re.M), 'Project license metadata mismatch'
     assert re.search(r'^PKG_LICENSE_FILES:=LICENSE$', recipe, re.M), 'Project license file metadata mismatch'
     assert manifest.get('LICENSE') == ['/usr/share/licenses/luci-app-netify-stats/LICENSE', '0644'], 'Project license installation mismatch'

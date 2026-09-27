@@ -2,8 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-netify-stats
 PKG_VERSION:=0.2.8
-PKG_RELEASE:=0
-# Development preparation only: package release remains paused pending validation.
+PKG_RELEASE:=1
 PKG_LICENSE:=GPL-3.0-only
 PKG_LICENSE_FILES:=LICENSE
 PKG_MAINTAINER:=Netify Stats contributors
