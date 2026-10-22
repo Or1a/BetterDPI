@@ -18,9 +18,9 @@ https://github.com/Or1a/BetterDPI/releases/latest/download/BetterDPI-openwrt-24.
 https://github.com/Or1a/BetterDPI/releases/latest/download/BetterDPI-openwrt-25.12-all.apk
 ```
 
-**这些固定名称将在采用新流程的下一次 Release 发布后生效。现有 V0.2.8 没有这些附件，也不包含本轮维护代码。当前安装旧版请使用 [README 中的已验证下载命令](README.md#command-line-download)。源码推送不会自动发布安装包。**
+**[V0.3.0 已发布](https://github.com/Or1a/BetterDPI/releases/tag/V0.3.0)，上述固定地址与应用内更新清单已核对可用。** 确定版本的下载地址与校验和见 [README](README.md#command-line-download)。
 
-新 Release 发布后，OpenWrt 24.10 可以直接运行：
+OpenWrt 24.10 可以直接运行：
 
 ```sh
 opkg update && opkg install 'https://github.com/Or1a/BetterDPI/releases/latest/download/BetterDPI-openwrt-24.10-all.ipk'
@@ -58,7 +58,7 @@ opkg update && opkg install 'https://github.com/Or1a/BetterDPI/releases/latest/d
 
 ## 已安装旧版的机器如何升级
 
-旧版页面没有更新入口，需要在包含更新器的新 Release 发布后，先用上面的下载、校验、安装命令升级一次。继续安装同一个包 `luci-app-netify-stats` 即可，不需要先卸载，也不需要重启路由器。OpenWrt 24.10 使用 IPK，25.12 使用 APK；这只升级插件，不会升级 OpenWrt 系统本身。
+旧版页面没有更新入口，先用上面的下载、校验、安装命令升级到 V0.3.0 一次。继续安装同一个包 `luci-app-netify-stats` 即可，不需要先卸载，也不需要重启路由器。OpenWrt 24.10 使用 IPK，25.12 使用 APK；这只升级插件，不会升级 OpenWrt 系统本身。
 
 更新器不会删除 `/etc/netify-stats.json` 或 `/tmp/netify-stats/stats.db`。采集器启动时会事务迁移支持的旧统计库；安装钩子按已保存的开关恢复采集，原本关闭的分析仍保持关闭。升级过程中采集会短暂中断、rpcd 会重启，页面可能短时显示刷新失败；这不是完全不中断的热更新，也不保证升级窗口内的流量统计连续。不要为了插件升级重启机器，否则 `/tmp` 统计会按原有设计清空。
 

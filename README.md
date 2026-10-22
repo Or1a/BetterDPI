@@ -36,13 +36,13 @@ BetterDPI 是用于 OpenWrt 的本地流量分析 LuCI 插件，通过 Netify �
 - 查看采集状态与排查建议，区分应用未识别和未能计入设备统计的流量。
 - 在页面手动检查 GitHub 新版本，确认后校验、安装，并查看升级结果。
 
-The 0.3.0 maintenance changes are in source only. The V0.2.8 release downloads below do not include them. Existing installations need one manual upgrade to a release containing the new updater before they can use its update button.
+The [V0.3.0 release](https://github.com/Or1a/BetterDPI/releases/tag/V0.3.0) includes these changes. Existing installations need one manual upgrade to V0.3.0 before they can use its update button. Both packages were built with their matching official SDK and their published payloads were checked against the tagged source; router upgrade and long-term validation remain pending.
 
-当前 0.3.0 维护变更尚未发布为安装包，下方 V0.2.8 下载不包含这些变更。旧版需先手动升级一次到包含更新入口的版本，之后才能使用页面升级。
+上述变更已纳入 [V0.3.0 Release](https://github.com/Or1a/BetterDPI/releases/tag/V0.3.0)。旧版先手动覆盖安装 V0.3.0 一次，之后即可使用页面升级。两种包均由对应官方 SDK 构建，发布附件已逐文件核对；真实路由器升级与长期验证仍待完成。
 
-The next release workflow also provides fixed download filenames. See the [GitHub installation guide](INSTALL.md) for direct IPK installation, APK download-and-install, and checksum verification; these new filenames are not present in V0.2.8.
+Fixed download filenames and an in-app update manifest are available. See the [GitHub installation guide](INSTALL.md) for direct IPK installation, APK download-and-install, and checksum verification.
 
-后续发布将提供固定名称下载链接。通过 GitHub 安装 IPK、下载后安装 APK 及校验方法见[便捷安装说明](INSTALL.md)；现有 V0.2.8 尚不提供这些固定名称。
+现在提供固定名称下载链接和应用内更新清单。通过 GitHub 安装 IPK、下载后安装 APK 及校验方法见[便捷安装说明](INSTALL.md)。
 
 ## Command-line download
 
@@ -51,13 +51,13 @@ Run the command matching your router's OpenWrt version. It downloads the package
 OpenWrt 24.10.8 (IPK):
 
 ```sh
-wget -O /tmp/BetterDPI-0.2.8-openwrt-24.10.8-all.ipk 'https://github.com/Or1a/BetterDPI/releases/download/V0.2.8/BetterDPI-0.2.8-openwrt-24.10.8-all.ipk' && echo 'fa2cf07d645c741b79ca9b823c3ea96138bbf7b5a4fe2cd6a7d30f72c7bc4380  /tmp/BetterDPI-0.2.8-openwrt-24.10.8-all.ipk' | sha256sum -c -
+wget -O /tmp/BetterDPI-0.3.0-openwrt-24.10.8-all.ipk 'https://github.com/Or1a/BetterDPI/releases/download/V0.3.0/BetterDPI-0.3.0-openwrt-24.10.8-all.ipk' && echo 'b782bff6d1af6624ac0389277817fe3e382bb41cd91cf194d7f85fded4c23c93  /tmp/BetterDPI-0.3.0-openwrt-24.10.8-all.ipk' | sha256sum -c -
 ```
 
 OpenWrt 25.12.5 (APK):
 
 ```sh
-wget -O /tmp/BetterDPI-0.2.8-openwrt-25.12.5-all.apk 'https://github.com/Or1a/BetterDPI/releases/download/V0.2.8/BetterDPI-0.2.8-openwrt-25.12.5-all.apk' && echo '5de4bbd7c31b0d6d9a116e71e4a8d00e6d2aa756558339a6688869a7b3bf7106  /tmp/BetterDPI-0.2.8-openwrt-25.12.5-all.apk' | sha256sum -c -
+wget -O /tmp/BetterDPI-0.3.0-openwrt-25.12.5-all.apk 'https://github.com/Or1a/BetterDPI/releases/download/V0.3.0/BetterDPI-0.3.0-openwrt-25.12.5-all.apk' && echo '02a4ffb86146185f5dc4046a193b8135c664fa01b8df605710e16d9ab7ee81c0  /tmp/BetterDPI-0.3.0-openwrt-25.12.5-all.apk' | sha256sum -c -
 ```
 
 ## 命令行下载
@@ -71,16 +71,16 @@ Connect to the router over SSH as `root`. After downloading and verifying the ma
 OpenWrt 24.10.8 (IPK):
 
 ```sh
-opkg update && opkg install /tmp/BetterDPI-0.2.8-openwrt-24.10.8-all.ipk
+opkg update && opkg install /tmp/BetterDPI-0.3.0-openwrt-24.10.8-all.ipk
 ```
 
 OpenWrt 25.12.5 (APK):
 
 ```sh
-apk update && apk add --allow-untrusted /tmp/BetterDPI-0.2.8-openwrt-25.12.5-all.apk
+apk update && apk add --allow-untrusted /tmp/BetterDPI-0.3.0-openwrt-25.12.5-all.apk
 ```
 
-The package is named `luci-app-netify-stats` internally. Its dependencies are `netifyd`, `python3`, `python3-sqlite3`, `luci-base`, and `rpcd`; the package manager resolves them from the configured feeds.
+The package is named `luci-app-netify-stats` internally. Its dependencies include `netifyd`, `python3`, `python3-sqlite3`, `python3-urllib`, `python3-openssl`, `ca-bundle`, `luci-base`, and `rpcd`; the package manager resolves them from the configured feeds.
 
 ## Netify setup and first use
 
@@ -127,16 +127,16 @@ See the [detailed documentation](netify-stats/README.md) for storage settings an
 OpenWrt 24.10.8（IPK）：
 
 ```sh
-opkg update && opkg install /tmp/BetterDPI-0.2.8-openwrt-24.10.8-all.ipk
+opkg update && opkg install /tmp/BetterDPI-0.3.0-openwrt-24.10.8-all.ipk
 ```
 
 OpenWrt 25.12.5（APK）：
 
 ```sh
-apk update && apk add --allow-untrusted /tmp/BetterDPI-0.2.8-openwrt-25.12.5-all.apk
+apk update && apk add --allow-untrusted /tmp/BetterDPI-0.3.0-openwrt-25.12.5-all.apk
 ```
 
-软件包内部名称为 `luci-app-netify-stats`，依赖 `netifyd`、`python3`、`python3-sqlite3`、`luci-base` 和 `rpcd`；包管理器会从已配置的软件源解析这些依赖。
+软件包内部名称为 `luci-app-netify-stats`，依赖包括 `netifyd`、`python3`、`python3-sqlite3`、`python3-urllib`、`python3-openssl`、`ca-bundle`、`luci-base` 和 `rpcd`；包管理器会从已配置的软件源解析这些依赖。
 
 ## 配置 Netify 与首次使用
 
