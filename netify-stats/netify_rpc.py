@@ -14,7 +14,7 @@ from netify_query import aggregate, empty_classification_coverage, normalize_fil
 from netify_accounting import interface_choices, save_interface
 from netify_update import read_status, start_check, start_install
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 
 
 DB_PATH = "/tmp/netify-stats/stats.db"
