@@ -107,7 +107,7 @@ jobs:
           sha256sum BetterDPI-* update.json > SHA256SUMS
           gh release create "${GITHUB_REF_NAME}" BetterDPI-* update.json SHA256SUMS \
             --title "${GITHUB_REF_NAME}" \
-            --notes 'OpenWrt 24.10: IPK (built with 24.10.8 SDK); OpenWrt 25.12: APK (built with 25.12.5 SDK). Versioned files and fixed-name aliases contain identical packages; update.json describes manual in-app updates. SHA256SUMS covers packages and the descriptor. Pure-Python/LuCI package (architecture all). Requires a separately configured Netifyd local flow socket. Statistics remain in /tmp and are lost on reboot.'
+            --notes-file "$GITHUB_WORKSPACE/RELEASE-NOTES.md"
           assets=$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name')
           test "$(printf '%s\n' "$assets" | wc -l)" -eq 6
           printf '%s\n' "$assets" | grep -Fx "BetterDPI-$package_version-openwrt-24.10.8-all.ipk"
