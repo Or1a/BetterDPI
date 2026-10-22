@@ -18,7 +18,7 @@ https://github.com/Or1a/BetterDPI/releases/latest/download/BetterDPI-openwrt-24.
 https://github.com/Or1a/BetterDPI/releases/latest/download/BetterDPI-openwrt-25.12-all.apk
 ```
 
-**当前版本为 [V0.3.1](https://github.com/Or1a/BetterDPI/releases/tag/V0.3.1)，发布流程会同步更新上述固定地址与应用内更新清单。** 确定版本的下载地址与校验和见 [README](README.md#command-line-download)。
+**当前版本为 [V0.3.1](https://github.com/Or1a/BetterDPI/releases/tag/V0.3.1)，上述固定地址与应用内更新清单已核对指向新版。** 确定版本的下载地址与校验和见 [README](README.md#command-line-download)。
 
 OpenWrt 24.10 可以直接运行：
 

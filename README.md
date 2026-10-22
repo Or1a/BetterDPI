@@ -38,9 +38,9 @@ BetterDPI 是用于 OpenWrt 的本地流量分析 LuCI 插件，通过 Netify �
 - 查看采集状态与排查建议，区分应用未识别和未能计入设备统计的流量。
 - 在页面手动检查 GitHub 新版本，确认后校验、安装，并查看升级结果。
 
-The [V0.3.1 release](https://github.com/Or1a/BetterDPI/releases/tag/V0.3.1) includes these changes. V0.3.0 users can use the update button; earlier installations need one manual upgrade. The release pipeline builds both packages with their matching official SDK; router upgrade and long-term validation remain pending.
+The [V0.3.1 release](https://github.com/Or1a/BetterDPI/releases/tag/V0.3.1) includes these changes. V0.3.0 users can use the update button; earlier installations need one manual upgrade. Both packages were built with their matching official SDK and verified against the tagged source; router upgrade and long-term validation remain pending.
 
-上述变更已纳入 [V0.3.1 Release](https://github.com/Or1a/BetterDPI/releases/tag/V0.3.1)。V0.3.0 可通过页面升级，更早版本先手动覆盖安装一次。发布流程使用对应官方 SDK 构建两种包；真实路由器升级与长期验证仍待完成。
+上述变更已纳入 [V0.3.1 Release](https://github.com/Or1a/BetterDPI/releases/tag/V0.3.1)。V0.3.0 可通过页面升级，更早版本先手动覆盖安装一次。两种包均已由对应官方 SDK 构建，发布附件已核对通过；真实路由器升级与长期验证仍待完成。
 
 Fixed download filenames and an in-app update manifest are available. See the [GitHub installation guide](INSTALL.md) for direct IPK installation, APK download-and-install, and checksum verification.
 
@@ -53,29 +53,13 @@ Run the command matching your router's OpenWrt version. It downloads the package
 OpenWrt 24.10.8 (IPK):
 
 ```sh
-(
-    set -eu
-    cd /tmp
-    wget -O 'BetterDPI-0.3.1-openwrt-24.10.8-all.ipk' 'https://github.com/Or1a/BetterDPI/releases/download/V0.3.1/BetterDPI-0.3.1-openwrt-24.10.8-all.ipk'
-    wget -O BetterDPI-0.3.1-SHA256SUMS 'https://github.com/Or1a/BetterDPI/releases/download/V0.3.1/SHA256SUMS'
-    awk '$2 == "BetterDPI-0.3.1-openwrt-24.10.8-all.ipk" { print }' BetterDPI-0.3.1-SHA256SUMS > BetterDPI-0.3.1-package.sha256
-    test "$(wc -l < BetterDPI-0.3.1-package.sha256)" -eq 1
-    sha256sum -c BetterDPI-0.3.1-package.sha256
-)
+wget -O /tmp/BetterDPI-0.3.1-openwrt-24.10.8-all.ipk 'https://github.com/Or1a/BetterDPI/releases/download/V0.3.1/BetterDPI-0.3.1-openwrt-24.10.8-all.ipk' && echo 'b01a9615ce4d1aaba819bba70e913d7469f2999511c935e57619d4ace4c00940  /tmp/BetterDPI-0.3.1-openwrt-24.10.8-all.ipk' | sha256sum -c -
 ```
 
 OpenWrt 25.12.5 (APK):
 
 ```sh
-(
-    set -eu
-    cd /tmp
-    wget -O 'BetterDPI-0.3.1-openwrt-25.12.5-all.apk' 'https://github.com/Or1a/BetterDPI/releases/download/V0.3.1/BetterDPI-0.3.1-openwrt-25.12.5-all.apk'
-    wget -O BetterDPI-0.3.1-SHA256SUMS 'https://github.com/Or1a/BetterDPI/releases/download/V0.3.1/SHA256SUMS'
-    awk '$2 == "BetterDPI-0.3.1-openwrt-25.12.5-all.apk" { print }' BetterDPI-0.3.1-SHA256SUMS > BetterDPI-0.3.1-package.sha256
-    test "$(wc -l < BetterDPI-0.3.1-package.sha256)" -eq 1
-    sha256sum -c BetterDPI-0.3.1-package.sha256
-)
+wget -O /tmp/BetterDPI-0.3.1-openwrt-25.12.5-all.apk 'https://github.com/Or1a/BetterDPI/releases/download/V0.3.1/BetterDPI-0.3.1-openwrt-25.12.5-all.apk' && echo '2858fcb84599e15b0d5cb76626bff06e09ba6a9a67c1bd3d9ce764ae80d55a41  /tmp/BetterDPI-0.3.1-openwrt-25.12.5-all.apk' | sha256sum -c -
 ```
 
 ## 命令行下载

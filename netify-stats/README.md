@@ -1,6 +1,6 @@
 # Netify Stats for OpenWrt
 
-本地流量分析 LuCI 页面，当前版本 **0.3.1**，见 [GitHub Release](https://github.com/Or1a/BetterDPI/releases/tag/V0.3.1)。发布流程使用 OpenWrt 24.10.8 和 25.12.5 对应官方 SDK 构建安装包；真实路由器安装升级和长期验证仍待完成，范围见 [RELEASE-PREPARATION.md](RELEASE-PREPARATION.md)。项目源码采用 [GPL-3.0-only](LICENSE)，允许商用，但再分发须遵守 GPL 条款。社区分类规则保留各自许可证和来源信息；v2fly/domain-list-community 与 NextDNS/services 均为 MIT，详见 [规则来源与重建](rules/README.md)。
+本地流量分析 LuCI 页面，当前版本 **0.3.1**，见 [GitHub Release](https://github.com/Or1a/BetterDPI/releases/tag/V0.3.1)。安装包已由 OpenWrt 24.10.8 和 25.12.5 对应官方 SDK 构建，并核对发布附件的内容、权限与校验和；真实路由器安装升级和长期验证仍待完成，范围见 [RELEASE-PREPARATION.md](RELEASE-PREPARATION.md)。项目源码采用 [GPL-3.0-only](LICENSE)，允许商用，但再分发须遵守 GPL 条款。社区分类规则保留各自许可证和来源信息；v2fly/domain-list-community 与 NextDNS/services 均为 MIT，详见 [规则来源与重建](rules/README.md)。
 
 ## 数据与统计口径
 
