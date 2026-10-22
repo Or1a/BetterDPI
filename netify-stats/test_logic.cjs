@@ -35,6 +35,17 @@ assert(!source.includes("E('summary', {}, '存储设置')"));
 assert(source.includes('white-space:nowrap!important; word-break:keep-all!important;'));
 const single=helpers.timeline([{bucket:1700000000,download:0,upload:0}],3600);
 assert.equal(single.children[0].children[1].children[0].children.filter(n=>n.tag==='circle').length,2);
+const connectionUi=setup(base(),{},{locale:'en'});
+assert.equal(text(connectionUi.root.querySelector('#ns-sort').children.find(option=>option.attrs.value==='flows')),'Hourly active connections');
+connectionUi.view.sortSelect.value='flows';connectionUi.view.paint();
+assert.equal(text(connectionUi.root.querySelector('.ns-flow-definition')),'A connection active in multiple hours is counted once per hour.');
+class BackwardClock extends Date {
+ static now() {return 1700000000000;}
+ toLocaleString() {return String(this.getTime());}
+}
+const futureUi=setup({...base(),clock_anomaly:true,timeline:[{bucket:2200000000,upload:10,download:20}],timeline_resolution_seconds:3600},{},{locale:'en',DateClass:BackwardClock});
+assert(text(futureUi.root.querySelector('.ns-clock-warning')).includes('ahead of the system clock'));
+assert(text(futureUi.root.querySelector('.ns-trend-selection')).includes('2200000000000 — 2200003600000'));
 const sections = walk(rendered);
 assert(sections.findIndex(node=>node.attrs.class==='ns-section ns-trend-section')<sections.findIndex(node=>node.attrs.class==='ns-stat download'));
 let args;

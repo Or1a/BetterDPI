@@ -8,12 +8,13 @@ import time
 
 sys.path.insert(0, "/usr/lib/netify-stats")
 from netify_classify import Classifier
-from netify_storage import save_limit, settings, read_enabled
+from netify_storage import save_limit, footprint, read_settings_snapshot
 from netify_control import set_enabled, control_status
-from netify_query import aggregate
-from netify_accounting import interface_choices, selected_interface, save_interface, active_interfaces
+from netify_query import aggregate, empty_classification_coverage, normalize_filters
+from netify_accounting import interface_choices, save_interface
+from netify_update import read_status, start_check, start_install
 
-VERSION = "0.2.8"
+VERSION = "0.3.0"
 
 
 DB_PATH = "/tmp/netify-stats/stats.db"
@@ -61,6 +62,8 @@ def query_summary(params):
         hours = 24
     hours = max(hours, 0)  # Zero means all retained data from this boot.
     device = str(params.get("device") or "").lower()
+    identification, search, application = normalize_filters(
+        params.get('identification'), params.get('search'), params.get('application'))
     now = int(time.time())
     # Include the boundary bucket rather than silently dropping its traffic.
     start = max(0, ((now - hours * 3600) // 3600) * 3600) if hours else 0
@@ -80,29 +83,43 @@ def query_summary(params):
         expanded = [v for v in expanded if isinstance(v, str)][:10] if isinstance(expanded, list) else []
     except (ValueError, TypeError):
         expanded = []
+    config = read_settings_snapshot()
+    control = control_status(config['enabled'])
+    control['config_error'] = config['config_error']
+    selected = config['interface']
     response = {
         "version": VERSION,
-        "enabled": read_enabled(),
-        "control": control_status(),
+        "enabled": config['enabled'],
+        "config_error": config['config_error'],
+        "control": control,
+        "update": read_status(VERSION),
         "rules_revision": classifier.rules.get("revision", ""),
         "rules_error": classifier.error,
         "rules_sources": classifier.rules.get("sources", []),
         "hours": hours,
         "device": device,
+        "identification": identification,
+        "search": search,
+        "application": application,
         "generated_at": now,
         "range_start": start,
+        "range_end": now,
+        "clock_anomaly": False,
+        "clock_warning": "",
         "resolution_seconds": 3600,
         "collector": load_json(COLLECTOR_STATUS),
         "total": {"upload": 0, "download": 0, "flows": 0},
+        "classification_coverage": empty_classification_coverage(),
         "timeline": [],
         "devices": [],
         "applications": [],
         "hosts": [],
         "interfaces": [],
         "interface_choices": interface_choices(),
-        "selected_interface": selected_interface(),
-        "active_interfaces": active_interfaces(),
-        "storage": settings(DB_PATH),
+        "selected_interface": selected,
+        "active_interfaces": [selected] if selected else [],
+        "storage": dict(footprint(DB_PATH), max_storage_mib=config['max_storage_mib'],
+                        error=config['storage_error']),
     }
     if not os.path.exists(DB_PATH):
         return response
@@ -110,20 +127,39 @@ def query_summary(params):
     # otherwise retained tracebacks can keep WAL pages pinned indefinitely.
     with closing(sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=10)) as db:
         db.row_factory = sqlite3.Row
+        if identification or search or application:
+            # Temporary selection keys spill to SQLite's temporary storage;
+            # the bounded page cache does not grow with the full result size.
+            db.execute('PRAGMA temp_store=FILE')
         db.execute("BEGIN")  # All totals and drill-downs share a consistent snapshot.
+        table = 'hourly_data' if db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='hourly_data'").fetchone() else 'hourly'
+        has_interfaces = bool(db.execute("SELECT 1 FROM sqlite_master WHERE name='interface_hourly'").fetchone())
+        tables = [table] + (['interface_hourly'] if has_interfaces else [])
+        newest = max((db.execute('SELECT MAX(bucket) FROM '+name).fetchone()[0] or 0
+                      for name in tables), default=0)
+        current_bucket = now//3600*3600
+        response['clock_anomaly'] = newest > current_bucket
+        if response['clock_anomaly']:
+            response['clock_warning'] = 'Retained records extend beyond the current system time.'
         if not hours:
-            oldest = db.execute('SELECT MIN(bucket) FROM hourly').fetchone()[0]
-            response['range_start'] = oldest if oldest is not None else now
-        if db.execute("SELECT 1 FROM sqlite_master WHERE name='interface_hourly'").fetchone():
+            oldest = [db.execute('SELECT MIN(bucket) FROM '+name).fetchone()[0] for name in tables]
+            response['range_start'] = min((value for value in oldest if value is not None), default=now)
+            response['range_end'] = max(now, newest)
+        end = current_bucket if hours else None
+        if has_interfaces:
+            where = 'bucket >= ?' + (' AND bucket <= ?' if end is not None else '')
+            args = [start] + ([end] if end is not None else [])
             response['interfaces'] = [dict(row) for row in db.execute('''
                 SELECT name, SUM(download) download, SUM(upload) upload,
                        MIN(since) since, MAX(until) until, SUM(resets) resets
-                FROM interface_hourly WHERE bucket >= ? GROUP BY name ORDER BY name''', (start,))]
+                FROM interface_hourly WHERE '''+where+' GROUP BY name ORDER BY name', args)]
         latest_ips = {}
         if db.execute("SELECT 1 FROM sqlite_master WHERE name='device_latest'").fetchone():
             latest_ips = dict(db.execute('SELECT mac, ip FROM device_latest'))
         response.update(aggregate(db, start, device, now, classifier, names, latest_ips,
-                                  app_page, device_page, sort, direction, expanded))
+                                  app_page, device_page, sort, direction, expanded, end=end,
+                                  identification=identification, search=search, application=application))
     return response
 
 
@@ -131,7 +167,16 @@ def main():
     if len(sys.argv) < 2:
         return 1
     if sys.argv[1] == "list":
-        print(json.dumps({"summary": {"hours": 0, "device": "", "app_page": 0, "device_page": 0, "sort": "", "direction": "", "expanded": ""}, "set_interface": {"interface": ""}, "set_storage": {"max_storage_mib": 0}, "set_enabled": {"enabled": False}}, separators=(",", ":")))
+        print(json.dumps({"summary": {"hours": 0, "device": "", "app_page": 0, "device_page": 0, "sort": "", "direction": "", "expanded": "", "identification": "", "search": "", "application": ""}, "set_interface": {"interface": ""}, "set_storage": {"max_storage_mib": 0}, "set_enabled": {"enabled": False}, "check_update": {}, "install_update": {"version": ""}}, separators=(",", ":")))
+        return 0
+    if sys.argv[1] == 'call' and len(sys.argv) >= 3 and sys.argv[2] in ('check_update', 'install_update'):
+        try:
+            params = json.load(sys.stdin)
+        except (ValueError, TypeError):
+            params = {}
+        version = params.get('version') if isinstance(params, dict) else None
+        result = start_check(VERSION) if sys.argv[2] == 'check_update' else start_install(VERSION, version)
+        print(json.dumps(result, separators=(',', ':')))
         return 0
     if sys.argv[1] == 'call' and len(sys.argv) >= 3 and sys.argv[2] == 'set_interface':
         try:

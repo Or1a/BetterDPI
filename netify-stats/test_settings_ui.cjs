@@ -58,6 +58,30 @@ function deferred() {let resolve;const promise=new Promise(r=>resolve=r);return 
  assert(warnings.includes('连接信息恢复失败'));
  assert(warnings.includes('本轮采集累计有 1.00 KiB'));
 
+ const invalid={...base(),enabled:null,selected_interface:null,config_error:'Invalid enabled setting',
+  control:{enabled:null,actual_state:'unknown',applied:false},storage:{max_storage_mib:null,error:'Invalid capacity'},
+  devices:[{mac:'test',name:'Retained device',download:100}],device_count:1};
+ const invalidWrites=[];
+ const recovering=setup(invalid,{set_enabled:value=>{invalidWrites.push(value);return {};},summary:()=>base()});
+ assert(text(recovering.root).includes('Retained device'));
+ assert(text(recovering.root).includes('仍可查看历史数据'));
+ assert.equal(recovering.view.analysisToggle.checked,false);
+ assert.equal(recovering.view.analysisToggle.indeterminate,true);
+ assert.equal(recovering.view.analysisToggle.disabled,true);
+ assert.equal(recovering.view.analysisRetry.hidden,true);
+ assert.equal(walk(recovering.root).find(n=>n.tag==='input' && n.attrs.type==='number').value,'');
+ await recovering.view.applyAnalysis(true);
+ assert.deepEqual(invalidWrites,[]);
+ await recovering.view.refresh();
+ assert.equal(recovering.view.analysisToggle.checked,true);
+ assert.equal(recovering.view.analysisToggle.indeterminate,false);
+ assert.equal(recovering.view.analysisToggle.disabled,false);
+ assert(!text(recovering.root).includes('仍可查看历史数据'));
+ assert.equal(recovering.view.storageInput.value,'0'); // Untouched blank value follows the repaired config.
+ recovering.view.storageInput.value='16';
+ await recovering.view.refresh();
+ assert.equal(recovering.view.storageInput.value,'16'); // A pending edit survives subsequent polls.
+
  const snapshots=[], queries=[], queued=setup(base(),{summary:(...args)=>{
   const result=deferred();queries.push(args);snapshots.push(result);return result.promise;
  }}).view;

@@ -11,6 +11,7 @@
   "netify_storage.py": ["/usr/lib/netify-stats/netify_storage.py", "0644"],
   "netify_proxy.py": ["/usr/lib/netify-stats/netify_proxy.py", "0644"],
   "netify_query.py": ["/usr/lib/netify-stats/netify_query.py", "0644"],
+  "netify_update.py": ["/usr/lib/netify-stats/netify_update.py", "0644"],
   "rules/community-rules.json": ["/usr/share/netify-stats/community-rules.json", "0644"],
   "rules/COMMUNITY-LICENSE": ["/usr/share/netify-stats/COMMUNITY-LICENSE", "0644"],
   "rules/NEXTDNS-LICENSE": ["/usr/share/netify-stats/NEXTDNS-LICENSE", "0644"],

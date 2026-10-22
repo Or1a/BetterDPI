@@ -118,7 +118,7 @@ const chinese = /[\u3400-\u9fff]/u;
   const {root} = setup(data, {}, {locale});
   assert.equal(text(root.querySelector('.ns-app-label').querySelector('strong')), '自定义应用 Download');
   assert.equal(text(root.querySelector('.ns-device-label').querySelector('strong')), '家里的手机');
-  assert.equal(text(root.querySelector('#ns-device').children[1]), 'Download');
+  assert.equal(text(root.querySelector('#ns-device').children[1]), 'Download · 02:00:00:00:00:01');
   assert(visible(root).includes('中文.example.test'));
  }
  for (const locale of ['en', 'zh-Hans', 'zh-Hant']) {
@@ -138,5 +138,24 @@ const chinese = /[\u3400-\u9fff]/u;
   assert.equal(labels[3].attrs.title, _('Domain only'));
   if (locale === 'en') assert(!chinese.test(visible(root)), 'Legacy Chinese compatibility metadata leaked into English UI');
  }
- console.log('LuCI English/Simplified/Traditional UI, catalog completeness, locale dates, async errors, and data names OK');
+ for (const locale of ['en','zh-Hans','zh-Hant']) {
+  const _=translator(locale);
+  const evidence={...base(),app_count:1,applications:[{id:'domain:shared.example',name:'shared.example',source_type:'domain',
+   classification_evidence:[{reason:'ambiguous',matched_domain:'shared.example',rule_type:'suffix',source_name:'DLC',candidates:['raw-app-a','raw-app-b'],candidate_count:4}],
+   classification_evidence_truncated:true}]};
+  const proof=setup(evidence,{},{locale}).root.querySelector('.ns-classification');
+  assert(text(proof).includes(_('Classification details')));
+  assert(text(proof).includes(_('The matching rule names multiple applications; no application was selected.')));
+  assert(text(proof).includes(_('%s: %s').format(_('Domain suffix rule'),'shared.example')));
+  assert(text(proof).includes(_('Rule source: %s').format('DLC')));
+  assert(text(proof).includes(_('Candidate applications: %s').format('raw-app-a, raw-app-b')));
+  assert(text(proof).includes(_('Only the first %d candidates are shown.').format(2)));
+  assert(text(proof).includes(_('Showing a sample of matching rules.')));
+  const reasons={...base(),app_count:1,applications:[{id:'Unknown',name:'Unknown',classification_evidence:[
+   {reason:'ip_literal'},{reason:'missing_host'},{reason:'invalid_host'},{reason:'rules_unavailable'}]}]};
+  const reasonText=text(setup(reasons,{},{locale}).root.querySelector('.ns-classification'));
+  for (const key of ['Only an IP address is available.','No hostname is available.','The supplied hostname is not a valid domain.','Community rules are unavailable.']) assert(reasonText.includes(_(key)));
+  if (locale==='en') assert(!chinese.test(text(proof)) && !chinese.test(reasonText));
+ }
+ console.log('LuCI English/Simplified/Traditional UI, classification explanations, catalog completeness, locale dates, async errors, and data names OK');
 })().catch(error => { console.error(error); process.exit(1); });

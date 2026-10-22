@@ -5,10 +5,64 @@
 'require poll';
 
 var PAGE_SIZE = 10;
-var callSummary = rpc.declare({ object: 'netify-stats', method: 'summary', params: [ 'hours', 'device', 'app_page', 'device_page', 'sort', 'direction', 'expanded' ], expect: { } });
+var callSummary = rpc.declare({ object: 'netify-stats', method: 'summary', params: [ 'hours', 'device', 'app_page', 'device_page', 'sort', 'direction', 'expanded', 'identification', 'search', 'application' ], expect: { } });
 var setStorage = rpc.declare({ object: 'netify-stats', method: 'set_storage', params: [ 'max_storage_mib' ], expect: { } });
 var setEnabled = rpc.declare({ object: 'netify-stats', method: 'set_enabled', params: [ 'enabled' ], expect: { } });
 var setInterface = rpc.declare({ object: 'netify-stats', method: 'set_interface', params: [ 'interface' ], expect: { } });
+var checkUpdate = rpc.declare({ object: 'netify-stats', method: 'check_update', params: [], expect: { } });
+var installUpdate = rpc.declare({ object: 'netify-stats', method: 'install_update', params: [ 'version' ], expect: { } });
+
+function updateVersion(value) {
+	return typeof value === 'string' && /^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})$/.test(value) ? value : '';
+}
+
+function newerUpdate(candidate, installed) {
+	if (!updateVersion(candidate) || !updateVersion(installed)) return false;
+	var next = candidate.split('.').map(Number), current = installed.split('.').map(Number);
+	for (var i = 0; i < 3; i++) if (next[i] !== current[i]) return next[i] > current[i];
+	return false;
+}
+
+function updateBusy(status) {
+	return !!status && (status.busy === true || ['checking', 'downloading', 'installing'].indexOf(status.state) >= 0);
+}
+
+function updateStateLabel(state) {
+	var labels = {
+		idle: _("Updates have not been checked."), checking: _("Checking GitHub Release…"),
+		available: _("A newer version is available."), up_to_date: _("No newer version is available."),
+		unsupported: _("Updates are not supported on this system."),
+		downloading: _("Downloading and verifying the update…"), installing: _("Installing the update… Keep the router powered on."),
+		succeeded: _("The package update completed. Reload this page to use the new interface."),
+		failed: _("The update request failed."),
+		interrupted: _("The update stopped before its result could be confirmed. Check the installed package before trying again.")
+	};
+	return Object.prototype.hasOwnProperty.call(labels, state) ? labels[state] : _("Update service unavailable. Refresh the page or finish installing the current package.");
+}
+
+function updateErrorLabel(code) {
+	var messages = {
+		unsupported_platform: _("No update package is available for this OpenWrt version."),
+		package_manager_missing: _("The required package manager is unavailable."),
+		operation_busy: _("Another update or settings operation is running. Refresh the status before trying again."),
+		update_not_checked: _("Check for updates before installing."),
+		candidate_changed: _("The available update changed. Check again before installing."),
+		check_expired: _("The update check expired. Check again before installing."),
+		invalid_manifest: _("The release information failed validation. No package was installed."),
+		manifest_unavailable: _("This release does not include update information. Try again after a compatible release is published."),
+		network_error: _("The download failed. Check the router's Internet connection and try again."),
+		download_too_large: _("The download exceeds the permitted size. No package was installed."),
+		size_mismatch: _("The download size does not match the release. No package was installed."),
+		checksum_mismatch: _("The download checksum does not match the release. No package was installed."),
+		installed_version_unknown: _("The installed package version could not be verified. Check the package manager before updating."),
+		install_failed: _("The package manager could not finish the update. Check its reported error before trying again."),
+		install_verification_failed: _("The installed package does not match the requested version. Check the package manager before trying again."),
+		worker_start_failed: _("The update task could not start. Refresh the status and try again."),
+		interrupted: _("The update stopped before its result could be confirmed. Check the installed package before trying again."),
+		status_invalid: _("The saved update status could not be read. Check the installed package before trying again.")
+	};
+	return Object.prototype.hasOwnProperty.call(messages, code) ? messages[code] : '';
+}
 
 function bytes(value) {
 	value = Number(value || 0);
@@ -36,21 +90,172 @@ function applicationName(item) {
 		"community:huawei": _("Huawei"),
 		"community:xiaomi": _("Xiaomi"),
 		"community:jd": _("JD.com"),
-		"community:taobao": _("Taobao")
+		"community:taobao": _("Taobao"),
+		"protocol:tls": _("TLS / encrypted traffic"),
+		"protocol:quic": _("QUIC"),
+		"protocol:dns": _("DNS"),
+		"protocol:http": _("HTTP / web"),
+		"protocol:stun": _("STUN / NAT traversal"),
+		"protocol:bittorrent": _("BitTorrent / P2P"),
+		"protocol:ssh": _("SSH / remote access"),
+		"protocol:vpn": _("VPN protocol"),
+		"protocol:tcp": _("TCP"),
+		"protocol:udp": _("UDP")
 	};
-	return Object.prototype.hasOwnProperty.call(known, item.id) ? known[item.id] : (item.name_i18n ? _(item.name_i18n) : esc(item.name));
+	var name = Object.prototype.hasOwnProperty.call(known, item.id) ? known[item.id] : (item.name_i18n ? _(item.name_i18n) : esc(item.name));
+	if (item.source_type === 'infrastructure') return _("%s (infrastructure; application unidentified)").format(name);
+	return item.source_type === 'protocol' || String(item.id).startsWith('protocol:') ? _("%s (application unidentified)").format(name) : name;
 }
 
 function sourceLabel(item) {
-	var type = item.source_type || (item.id === 'Unknown' ? 'unknown' : String(item.id).startsWith('community:') ? 'community' : String(item.id).startsWith('domain:') ? 'domain' : 'native');
+	var type = item.source_type || (item.id === 'Unknown' ? 'unknown' : String(item.id).startsWith('community:') ? 'community' : String(item.id).startsWith('domain:') ? 'domain' : String(item.id).startsWith('protocol:') ? 'protocol' : 'native');
 	var labels = {
 		native: _("Native Netify classification"),
 		community: _("Community domain rules"),
+		infrastructure: _("Shared infrastructure"),
 		domain: _("Domain only"),
+		protocol: _("Protocol only"),
 		unknown: _("Unidentified")
 	};
 	var label = Object.prototype.hasOwnProperty.call(labels, type) ? labels[type] : labels.unknown, names = item.source_names || [];
 	return names.length ? _("%s (%s)").format(label, names.join(' / ')) : label;
+}
+
+function classificationDetails(item) {
+	var explanations = {
+		native: _("Netify identified this application directly."),
+		protocol: _("Only the protocol is identified; the application remains unknown."),
+		community: _("A community domain rule supplied this classification."),
+		infrastructure: _("The domain identifies a shared hosting or CDN provider, not a specific application."),
+		ambiguous: _("The matching rule names multiple applications; no application was selected."),
+		unmatched_domain: _("The domain is known, but no application rule matched."),
+		ip_literal: _("Only an IP address is available."),
+		missing_host: _("No hostname is available."),
+		invalid_host: _("The supplied hostname is not a valid domain."),
+		rules_unavailable: _("Community rules are unavailable.")
+	};
+	var evidence = (item.classification_evidence || []).slice(0, 5);
+	return E('section', { 'class': 'ns-classification' }, [
+		E('h4', {}, _("Classification details")),
+		E('p', {}, sourceLabel(item)),
+		E('div', {}, evidence.map(function(entry) {
+			var children = [ E('p', {}, explanations[entry.reason] || _("Classification details are unavailable.")) ];
+			if (entry.matched_domain) {
+				var kind = entry.rule_type === 'exact' ? _("Exact domain rule") : _("Domain suffix rule");
+				children.push(E('p', {}, _("%s: %s").format(kind, esc(entry.matched_domain))));
+			}
+			if (entry.reason === 'protocol' && entry.protocol)
+				children.push(E('p', {}, _("Observed protocol: %s").format(esc(entry.protocol))));
+			if (entry.source_name) children.push(E('p', {}, _("Rule source: %s").format(esc(entry.source_name))));
+			if (entry.reason === 'ambiguous' && Array.isArray(entry.candidates))
+				children.push(E('p', {}, _("Candidate applications: %s").format(entry.candidates.slice(0, 5).map(esc).join(', '))));
+			if (entry.reason === 'ambiguous' && entry.candidate_count > (entry.candidates || []).length)
+				children.push(E('p', {}, _("Only the first %d candidates are shown.").format((entry.candidates || []).length)));
+			return E('div', { 'class': 'ns-evidence' }, children);
+		})),
+		item.classification_evidence_truncated ? E('p', {}, _("Showing a sample of matching rules.")) : E('span')
+	]);
+}
+
+function classificationCoverage(data) {
+	var coverage = data.classification_coverage;
+	// Older RPC versions have no breakdown. Never infer it from a ranked page.
+	if (!coverage) return E('span');
+	var groups = [
+		['application', _("Application identified")],
+		['domain', _("Domain or infrastructure only")],
+		['protocol', _("Protocol only")],
+		['unknown', _("Unidentified")]
+	];
+	var total = itemTotal(data.total || {}), sum = 0;
+	var valid = Number.isFinite(total) && total >= 0 && groups.every(function(group) {
+		var values = coverage[group[0]], amount = values && itemTotal(values);
+		if (!values || !Number.isFinite(amount) || amount < 0) return false;
+		group.push(amount); sum += amount; return true;
+	});
+	// Floating-point parsing of very large JSON byte counters can differ by a
+	// rounding unit. Inconsistent data must not turn into invented percentages.
+	valid = valid && Math.abs(sum-total) <= Math.max(1, total*Number.EPSILON*8);
+	return E('section', { 'class': 'ns-section ns-coverage' }, [
+		E('div', { 'class': 'ns-section-head' }, E('h3', {}, _("Traffic identification"))),
+		E('p', { 'class': 'ns-range' }, _("Download + upload for the selected time range, devices and traffic filters.")),
+		valid ? E('div', { 'class': 'ns-coverage-grid' }, groups.map(function(group) {
+			var share = total > 0 ? Math.max(0, Math.min(100, group[2]/total*100)) : 0;
+			return E('div', { 'class': 'ns-coverage-item ns-coverage-' + group[0] }, [
+				E('strong', {}, group[1]),
+				E('div', { 'class': 'ns-coverage-value' }, _("%s · %s%% of traffic").format(bytes(group[2]), share.toFixed(1))),
+				E('div', { 'class': 'ns-coverage-bar', 'aria-hidden': 'true' }, E('span', { 'style': 'width:' + share.toFixed(2) + '%' }))
+			]);
+		})) : E('p', {}, _("The identification breakdown is unavailable."))
+	]);
+}
+
+function collectionDiagnostics(data, opened, toggle) {
+	var collector = data.collector || {}, control = data.control || {}, now = Number(data.generated_at);
+	if (!Number.isFinite(now) || now <= 0) now = Date.now()/1000;
+	var timestamp = Number(collector.timestamp || 0), age = now-timestamp;
+	var fresh = timestamp > 0 && age >= -5 && age <= 120;
+	var paused = data.enabled === false && control.actual_state !== 'running' && control.actual_state !== 'partial';
+	var partial = control.actual_state === 'partial';
+	var unavailable = data.config_error || data.enabled === null || control.actual_state === 'unknown';
+	var unattributed = Number(collector.unattributed_upload || 0) + Number(collector.unattributed_download || 0);
+	var messages = [], state;
+	function issue(message, action, detail) {
+		messages.push(E('div', { 'class': 'ns-diagnostic-issue' }, [
+			E('p', {}, message), action ? E('p', {}, action) : E('span'),
+			detail ? E('pre', {}, errorMessage(detail)) : E('span')
+		]));
+	}
+	if (unavailable) {
+		state = _("Collection status unavailable");
+		issue(_("Repair the settings before changing analysis state."), '', data.config_error);
+	} else if (partial) {
+		state = _("Some services are running");
+	} else if (data.enabled === false && control.actual_state === 'running') {
+		state = _("Collection is still running");
+	} else if (paused) {
+		state = _("Collection paused");
+	} else if (control.actual_state === 'stopped') {
+		state = _("Collection stopped unexpectedly");
+		issue(_("Analysis is enabled, but its services are stopped."), _("Retry applying the analysis setting and check the Netify service."), control.apply_error);
+	} else if (!fresh) {
+		state = _("Collector status is stale or unavailable");
+		issue(_("The collector has not provided a current status."), _("Check that the statistics collector is running and can write its status file."), collector.last_error);
+	} else if (collector.connected !== true) {
+		state = _("Waiting for Netify connection");
+		issue(_("Collection is temporarily unavailable. Showing historical data."), _("Check that Netify is running and its local socket is enabled."), collector.last_error);
+	} else {
+		state = _("Collector connected");
+		if (collector.last_error) issue(_("The collector reported an error."), _("Check the collector service log for this error."), collector.last_error);
+	}
+	if (!unavailable && (partial || control.applied === false || control.apply_error || data.enabled === false && control.actual_state === 'running'))
+		issue(_("The analysis setting has not been fully applied."), _("Use Retry applying above, then check the service error if the problem continues."), control.apply_error);
+	if (collector.proxy_error) issue(_("Proxy connection attribution failed. Some device statistics may be incomplete."), _("Check the proxy mode and conntrack availability."), collector.proxy_error);
+	if (collector.export_error) issue(_("Connection metadata recovery failed. Some device or application statistics may be incomplete."), _("Check Netify JSON export and whether the collector can read it."), collector.export_error);
+	if (collector.interface_error) issue(_("Interface counters are temporarily unavailable."), _("Check whether the selected statistics interface is available."), collector.interface_error);
+	var storageError = data.storage && data.storage.error || collector.storage && collector.storage.error;
+	if (storageError) issue(_("Statistics storage maintenance failed. Check the capacity setting and available space."), '', storageError);
+	if (unattributed > 0) issue(_("%s of traffic could not be attributed to devices during this collection session. Historical statistics are incomplete.").format(bytes(unattributed)));
+	if (Number(collector.invalid_messages || 0) > 0) issue(_("Some Netify messages could not be processed."), _("Check Netify compatibility and the collector service log."));
+	var lastEvent = Number(collector.last_event || 0);
+	function count(label, value) {
+		var number = Number(value || 0);
+		return E('div', {}, [E('dt', {}, label), E('dd', {}, Number.isFinite(number) ? String(Math.max(0, Math.floor(number))) : _("Not available"))]);
+	}
+	return E('details', { 'class': 'ns-section ns-diagnostics', 'open': opened ? '' : null, 'toggle': toggle }, [
+		E('summary', {}, [_('Collection diagnostics'), ' · ', E('strong', { 'class': 'ns-diagnostic-state' }, state), messages.length ? ' · ' + _("Attention needed") : '']),
+		E('p', { 'class': 'ns-range' }, _("Collector status and counters apply to the whole current collection session, regardless of traffic filters.")),
+		E('p', {}, _("Last status update: %s").format(timestamp > 0 ? displayDate(new Date(timestamp*1000)) : _("Not available"))),
+		E('p', {}, _("Last traffic event: %s").format(lastEvent > 0 ? displayDate(new Date(lastEvent*1000)) : _("No event received yet"))),
+		!paused && fresh && collector.connected === true ? E('p', {}, _("An idle network may produce no traffic events while the collector stays connected.")) : E('span'),
+		E('dl', { 'class': 'ns-diagnostic-counts' }, [
+			count(_("Recorded traffic events"), collector.events), count(_("Active connection metadata"), collector.active_metadata),
+			count(_("Events received without metadata"), collector.missing_metadata), count(_("Events recovered"), collector.recovered_stats),
+			count(_("Events awaiting metadata"), collector.pending_stats), count(_("Invalid messages"), collector.invalid_messages)
+		]),
+		E('p', {}, _("Unidentified application traffic is already counted. Traffic that could not be attributed to a device is a separate statistics gap.")),
+		E('div', { 'class': 'ns-diagnostic-issues' }, messages)
+	]);
 }
 
 function errorMessage(value) {
@@ -67,6 +272,7 @@ function errorMessage(value) {
 		"Services did not fully start. Please try again.": _("Services did not fully start. Please try again."),
 		"Services did not fully stop. Please try again.": _("Services did not fully stop. Please try again."),
 		"Another analysis toggle is in progress. Please try again.": _("Another analysis toggle is in progress. Please try again."),
+		"An application update is being installed. Wait for it to finish before changing analysis.": _("An application update is being installed. Wait for it to finish before changing analysis."),
 		"Select an interface that exists on this device.": _("Select an interface that exists on this device."),
 		"Invalid enabled setting": _("Invalid enabled setting"),
 		"enabled must be boolean": _("enabled must be boolean"),
@@ -76,6 +282,11 @@ function errorMessage(value) {
 	};
 	// Keep system diagnostics verbatim; never translate device names or paths.
 	return Object.prototype.hasOwnProperty.call(known, message) ? known[message] : message;
+}
+
+function storageLimitValue(data) {
+	var value = data.storage && data.storage.max_storage_mib;
+	return value === null ? '' : String(value || 0);
 }
 
 function itemTotal(item) { return Number(item.upload || 0) + Number(item.download || 0); }
@@ -121,14 +332,16 @@ function miniRows(items, labelKey, scrollKey) {
 	}));
 }
 
-function applicationRows(items, page, expanded, refresh) {
-	if (!items.length) return E('div', { 'class': 'ns-empty' }, _("No data yet. Netify is identifying new connections."));
+function applicationRows(items, page, expanded, refresh, focus, filtered) {
+	if (!items.length) return E('div', { 'class': 'ns-empty' }, filtered ? _("No traffic matches these filters.") : _("No data yet. Netify is identifying new connections."));
 	var offset = (page - 1) * PAGE_SIZE;
 	return E('div', { 'class': 'ns-app-list' }, items.map(function(item, localIndex) {
 		var hosts = sorted((item.hosts || []).filter(function(host) { return host.name && host.name.toLowerCase() !== 'unknown'; }), 'total', 'desc').slice(0,5);
 		var detail = E('div', { 'class': 'ns-app-detail', 'style': expanded.has(item.id) ? 'display:block' : 'display:none' }, E('div', { 'class': 'ns-detail-grid' }, [
 			E('section', {}, [ E('h4', {}, _("Devices generating this traffic")), miniRows(item.devices, 'name', item.id + ':devices') ]),
-			E('section', {}, [ E('h4', {}, _("Websites / services")), miniRows(hosts, 'name', item.id + ':hosts') ])
+			E('section', {}, [ E('h4', {}, _("Websites / services")), miniRows(hosts, 'name', item.id + ':hosts') ]),
+			classificationDetails(item),
+			E('button', { 'type': 'button', 'class': 'btn cbi-button ns-focus-application', 'click': function() { return focus(item); } }, _("View devices and trend for this traffic"))
 		]));
 		var button = E('button', { 'class': 'ns-app-main', 'type': 'button', 'aria-expanded': expanded.has(item.id) ? 'true' : 'false', 'click': function(ev) {
 			var open = detail.style.display !== 'none';
@@ -173,7 +386,7 @@ function deviceRows(items, page) {
 	}));
 }
 
-function timeline(items, step, selection) {
+function timeline(items, step, selection, clockAnomaly) {
 	items = items || [];
 	if (!items.length) return E('div', { 'class': 'ns-empty' }, _("No trend data"));
 	step = Number(step || 3600);
@@ -181,7 +394,7 @@ function timeline(items, step, selection) {
 	var magnitude = Math.pow(10, Math.floor(Math.log10(peak))), max = Math.ceil(peak / magnitude) * magnitude;
 	var selected = E('p', { 'class': 'ns-range ns-trend-selection', 'aria-live': 'polite' });
 	function description(item) {
-		var start = new Date(item.bucket * 1000), end = new Date(Math.min((item.bucket + step)*1000, Date.now()));
+		var start = new Date(item.bucket * 1000), end = new Date(clockAnomaly ? (item.bucket + step)*1000 : Math.max(item.bucket*1000, Math.min((item.bucket + step)*1000, Date.now())));
 		return displayDate(start) + ' — ' + displayDate(end) + ' ｜ ' + _("Download %s · Upload %s").format(bytes(item.download), bytes(item.upload));
 	}
 	var selectedItem = selection && items.find(function(item) { return item.bucket === selection.bucket; });
@@ -214,15 +427,86 @@ function timeline(items, step, selection) {
 }
 
 return view.extend({
-	load: function() { return callSummary(0, '', 1, 1, 'total', 'desc', '[]'); },
+	load: function() { return callSummary(0, '', 1, 1, 'total', 'desc', '[]', '', '', ''); },
 
 	currentSort: function() { return { key: this.sortSelect && this.sortSelect.value || 'total', direction: this.orderSelect && this.orderSelect.value || 'desc' }; },
+
+	paintUpdate: function() {
+		if (!this.updatePanel || !this.currentData) return;
+		var data = this.currentData, status = data.update || {}, candidate = status.candidate || {};
+		var installed = updateVersion(status.current_version) || updateVersion(data.version);
+		var offered = updateVersion(candidate.version), validOffer = offered && candidate.tag === 'V' + offered;
+		var service = !!data.update && typeof status.state === 'string';
+		var busy = !!this.updatePending || updateBusy(status);
+		var canInstall = service && !busy && status.state === 'available' && validOffer && newerUpdate(offered, installed);
+		var checked = Number(status.checked_at || 0), details = [];
+		if (validOffer) details.push(E('p', {}, [_("Release version: %s").format(offered), ' · ',
+			E('a', { 'href': 'https://github.com/Or1a/BetterDPI/releases/tag/' + encodeURIComponent(candidate.tag), 'target': '_blank', 'rel': 'noopener noreferrer' }, _("View release notes"))]));
+		if (Number.isFinite(checked) && checked > 0) details.push(E('p', {}, _("Last update check: %s").format(displayDate(new Date(checked*1000)))));
+		var explanation = updateErrorLabel(status.error);
+		if (explanation) details.push(E('p', { 'role': 'alert' }, explanation));
+		if (status.error || status.detail) details.push(E('pre', { 'class': 'ns-update-detail' }, [esc(status.error), esc(status.detail)].filter(Boolean).join('\n')));
+		if (this.updateError) details.push(E('p', { 'class': 'ns-update-request-error', 'role': 'alert' }, this.updateError));
+		dom.content(this.updatePanel, [
+			E('div', { 'class': 'ns-section-head' }, E('h3', {}, _("Plugin updates"))),
+			E('p', {}, _("Installed version: %s").format(installed || _("Not available"))),
+			E('p', { 'class': 'ns-update-state', 'role': 'status' }, this.updatePending ? _("Sending update request…") : updateStateLabel(status.state)),
+			E('p', { 'class': 'ns-range' }, _("Checks run only when requested. Updates are downloaded from Or1a/BetterDPI on GitHub.")),
+			E('p', { 'class': 'ns-range' }, _("Updating briefly interrupts collection. Settings and retained statistics are kept; the router is not rebooted.")),
+			E('div', { 'class': 'ns-update-actions' }, [
+				E('button', { 'type': 'button', 'class': 'btn cbi-button ns-update-check', 'disabled': !service || busy ? '' : null, 'click': L.bind(function() { return this.requestUpdate(false); }, this) }, _("Check for updates")),
+				E('button', { 'type': 'button', 'class': 'btn cbi-button cbi-button-apply ns-update-install', 'disabled': canInstall ? null : '', 'click': L.bind(function() { return this.requestUpdate(true); }, this) }, _("Install update")),
+				E('button', { 'type': 'button', 'class': 'btn cbi-button ns-update-refresh', 'disabled': this.updatePending ? '' : null, 'click': L.bind(function() { return this.refresh(true); }, this) }, _("Refresh update status")),
+				status.state === 'succeeded' ? E('button', { 'type': 'button', 'class': 'btn cbi-button ns-update-reload', 'click': function() {
+					if (window.confirm(_("Reload this page? Unsaved settings and current filters will be lost."))) window.location.reload();
+				} }, _("Reload page")) : E('span')
+			]),
+			E('div', {}, details)
+		]);
+	},
+
+	requestUpdate: function(install) {
+		var status = this.currentData && this.currentData.update, candidate = status && status.candidate || {};
+		if (!status || this.updatePending || updateBusy(status)) return Promise.resolve();
+		var version = updateVersion(candidate.version), current = updateVersion(status.current_version) || updateVersion(this.currentData.version);
+		if (install && (status.state !== 'available' || candidate.tag !== 'V' + version || !newerUpdate(version, current))) return Promise.resolve();
+		if (install && !window.confirm(_("Install BetterDPI %s? Collection will briefly stop. Settings and retained statistics will be kept, and the router will not reboot.").format(version))) return Promise.resolve();
+		this.updatePending = true;
+		this.updateError = '';
+		// A summary already in flight predates this mutation. It must not put
+		// an idle/available snapshot back over an accepted update job.
+		this.requestId = (this.requestId || 0) + 1;
+		this.refreshKey = null;
+		this.paintUpdate();
+		return (install ? installUpdate(version) : checkUpdate()).then(L.bind(function(result) {
+			if (!result || typeof result.state !== 'string') throw new Error(_("The update service returned an invalid response."));
+			this.currentData.update = result;
+			// A failed preflight may also prevent saving its status. Keep the
+			// RPC error visible when the next summary still has the old state.
+			if (result.error) this.updateError = [updateErrorLabel(result.error) || esc(result.error), esc(result.detail)].filter(Boolean).join('\n');
+		}, this)).catch(L.bind(function(error) {
+			this.updateError = _("Could not contact the update service: %s").format(errorMessage(error.message || error));
+		}, this)).finally(L.bind(function() {
+			return this.refresh(true).finally(L.bind(function() {
+				this.updatePending = false;
+				this.paintUpdate();
+			}, this));
+		}, this));
+	},
 
 	updateAnalysis: function(data) {
 		if (!this.analysisToggle || this.analysisApplying) return;
 		var control = data.control || {}, state = control.actual_state;
-		this.analysisToggle.checked = state ? state === 'running' : data.enabled !== false;
-		this.analysisToggle.indeterminate = state === 'partial';
+		var invalid = !!data.config_error || data.enabled === null || state === 'unknown';
+		this.analysisToggle.disabled = invalid;
+		this.analysisRetry.disabled = invalid;
+		this.analysisToggle.checked = state ? state === 'running' : data.enabled === true;
+		this.analysisToggle.indeterminate = state === 'partial' || invalid;
+		if (invalid) {
+			dom.content(this.analysisNotice, _("Repair the settings before changing analysis state."));
+			this.analysisRetry.hidden = true;
+			return;
+		}
 		var issue = this.analysisError || control.apply_error || '';
 		if (control.applied === false || issue) {
 			var actual = state === 'running' ? _("Running") : state === 'stopped' ? _("Stopped") : _("Some services are running");
@@ -235,7 +519,7 @@ return view.extend({
 	},
 
 	applyAnalysis: function(enabled) {
-		if (this.analysisApplying) return;
+		if (this.analysisApplying || this.currentData.config_error || typeof enabled !== 'boolean' || this.currentData.enabled === null) return;
 		this.analysisApplying = true;
 		this.analysisToggle.disabled = true;
 		this.analysisRetry.disabled = true;
@@ -258,7 +542,7 @@ return view.extend({
 	},
 
 	interfacePanel: function(data) {
-		var selected = data.selected_interface || '', choices = (data.interface_choices || []).slice();
+		var selected = data.selected_interface || '', invalid = data.selected_interface === null, choices = (data.interface_choices || []).slice();
 		if (selected && choices.indexOf(selected) < 0) choices.push(selected);
 		var draft = this.interfaceDraft == null ? selected : this.interfaceDraft;
 		if (draft && choices.indexOf(draft) < 0) choices.push(draft);
@@ -267,10 +551,10 @@ return view.extend({
 				return E('option', { 'value': name }, (data.interface_choices || []).indexOf(name) < 0 ? _("%s (currently unavailable)").format(name) : name);
 			})));
 		select.value = draft;
-		var confirm = E('button', { 'type': 'button', 'class': 'cbi-button cbi-button-apply', 'disabled': this.interfaceSaving || draft === selected ? '' : null }, _("Confirm and save"));
+		var confirm = E('button', { 'type': 'button', 'class': 'cbi-button cbi-button-apply', 'disabled': this.interfaceSaving || (!invalid && draft === selected) ? '' : null }, _("Confirm and save"));
 		select.addEventListener('change', L.bind(function() {
 			this.interfaceDraft = select.value;
-			confirm.disabled = this.interfaceSaving || select.value === selected;
+			confirm.disabled = this.interfaceSaving || (!invalid && select.value === selected);
 		}, this));
 		confirm.addEventListener('click', L.bind(function() {
 			this.interfaceSaving = true; select.disabled = true;
@@ -287,19 +571,31 @@ return view.extend({
 				if (this.errorNode) dom.content(this.errorNode, _("Could not save the interface: %s").format(errorMessage(error.message)));
 			}, this)).finally(L.bind(function() { this.interfaceSaving = false; select.disabled = false; this.paint(); }, this));
 		}, this));
-		var rows = (data.interfaces || []).filter(function(item) { return selected ? item.name === selected : (data.active_interfaces || []).indexOf(item.name) >= 0; });
+		var history = this.historyInterface == null ? selected : this.historyInterface;
+		var recorded = Array.from(new Set((data.interfaces || []).map(function(item) { return item.name; })));
+		if (history && recorded.indexOf(history) < 0) recorded.push(history);
+		recorded.sort();
+		var historySelect = E('select', { 'aria-label': _("View interface history"), 'style': 'max-width:100%' },
+			[E('option', { 'value': '' }, _("All recorded interfaces"))].concat(recorded.map(function(name) { return E('option', { 'value': name }, name); })));
+		historySelect.value = history;
+		historySelect.addEventListener('change', L.bind(function() {
+			this.historyInterface = historySelect.value;
+			this.paint();
+		}, this));
+		var rows = (data.interfaces || []).filter(function(item) { return !history || item.name === history; });
 		return E('details', { 'class': 'ns-section', 'open': this.interfaceExpanded ? '' : null, 'toggle': L.bind(function(ev) { this.interfaceExpanded = ev.currentTarget.open; }, this) }, [
 			E('summary', {}, _("Interface traffic")),
 			E('div', { 'style': 'display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:12px 0' }, [E('label', {}, [_("Statistics interface") + ' ', select]), confirm]),
-			E('p', {}, selected ? _("Bound interface: %s").format(selected) : _("No interface is bound")),
-			E('div', {}, rows.length ? rows.map(function(item) { return E('div', {}, [
+			E('p', {}, invalid ? _("The capture interface setting is invalid.") : selected ? _("Bound interface: %s").format(selected) : _("No interface is bound")),
+			E('label', { 'class': 'ns-history-selector' }, [ _("View interface history") + ' ', historySelect ]),
+			E('div', { 'class': 'ns-interface-history' }, rows.length ? rows.map(function(item) { return E('div', {}, [
 				E('strong', {}, item.name), trafficBar(item),
 				E('div', { 'class': 'ns-values' }, [
 					E('span', { 'class': 'ns-down' }, [E('small', {}, _("Receive RX")), E('strong', {}, bytes(item.download))]),
 					E('span', { 'class': 'ns-up' }, [E('small', {}, _("Transmit TX")), E('strong', {}, bytes(item.upload))])
 				]),
 				item.resets ? E('p', { 'role': 'alert' }, _("The interface was reset. Traffic during the reset could not be fully measured.")) : E('span')
-			]); }) : E('p', {}, selected ? _("No records for this interface") : _("Select an interface to measure")))
+			]); }) : E('p', {}, history ? _("No records for this interface") : _("No interface records in this time range")))
 		]);
 	},
 
@@ -308,7 +604,7 @@ return view.extend({
 		var total = data.total || {}, order = this.currentSort();
 		this.expandedApps = this.expandedApps || new Set();
 		this.trendSelection = this.trendSelection || { bucket: null };
-		var collector = data.collector || {}, unattributed = Number(collector.unattributed_download || 0) + Number(collector.unattributed_upload || 0);
+		var filtered = !!(data.identification || data.search || data.application);
 		var applications = sorted(data.applications, order.key, order.direction);
 		var devices = sorted(data.devices, order.key, order.direction);
 		var pages = Math.max(1, Math.ceil((data.app_count || 0) / PAGE_SIZE));
@@ -316,21 +612,21 @@ return view.extend({
 		var devicePages = Math.max(1, Math.ceil((data.device_count || 0) / PAGE_SIZE));
 		this.devicePage = Math.min(Math.max(this.devicePage || 1, 1), devicePages);
 		return E('div', { 'class': 'ns-dashboard', 'aria-live': 'polite' }, [
-			E('section', { 'class': 'ns-section ns-trend-section' }, [ E('div', { 'class': 'ns-section-head' }, [ E('h3', {}, _("Device traffic trend")), E('div', { 'class': 'ns-legend' }, [ E('span', { 'class': 'download' }, _("Download")), E('span', { 'class': 'upload' }, _("Upload")) ]) ]), timeline(data.timeline, data.timeline_resolution_seconds, this.trendSelection) ]),
+			filtered ? E('p', { 'class': 'ns-result-scope' }, _("Results follow the selected filters. Matching an application name includes its traffic; matching only a domain includes only that domain's records.")) : E('span'),
+			E('section', { 'class': 'ns-section ns-trend-section' }, [ E('div', { 'class': 'ns-section-head' }, [ E('h3', {}, _("Device traffic trend")), E('div', { 'class': 'ns-legend' }, [ E('span', { 'class': 'download' }, _("Download")), E('span', { 'class': 'upload' }, _("Upload")) ]) ]), timeline(data.timeline, data.timeline_resolution_seconds, this.trendSelection, data.clock_anomaly) ]),
+			data.config_error ? E('p', { 'class': 'ns-config-error', 'role': 'alert' }, _("Settings are invalid. Historical data is still available. %s").format(errorMessage(data.config_error))) : E('span'),
+			data.clock_anomaly ? E('p', { 'class': 'ns-clock-warning', 'role': 'alert' }, _("Some records are ahead of the system clock. All history includes them; recent time ranges exclude future hours.")) : E('span'),
+			order.key === 'flows' ? E('p', { 'class': 'ns-flow-definition' }, _("A connection active in multiple hours is counted once per hour.")) : E('span'),
 			data.rules_error ? E('p', { 'role': 'alert' }, _("Community rules could not be loaded. Showing domains instead.")) : E('span'),
-			data.enabled !== false && data.collector && (data.collector.connected !== true || Date.now()/1000 - Number(data.collector.timestamp || 0) > 120) ? E('p', { 'role': 'alert' }, _("Collection is temporarily unavailable. Showing historical data.")) : E('span'),
-			collector.proxy_error ? E('p', { 'role': 'alert', 'title': errorMessage(collector.proxy_error) }, _("Proxy connection attribution failed. Some device statistics may be incomplete.")) : E('span'),
-			collector.export_error ? E('p', { 'role': 'alert', 'title': errorMessage(collector.export_error) }, _("Connection metadata recovery failed. Some device or application statistics may be incomplete.")) : E('span'),
-			unattributed > 0 ? E('p', { 'role': 'status' }, _("%s of traffic could not be attributed to devices during this collection session. Historical statistics are incomplete.").format(bytes(unattributed))) : E('span'),
 			E('div', { 'class': 'ns-stats' }, [
 				stat(_("Device download"), bytes(total.download), _("Internet → device"), 'download'), stat(_("Device upload"), bytes(total.upload), _("Device → Internet"), 'upload')
 			]),
-			!data.device ? this.interfacePanel(data) : E('span'),
-			data.collector && data.collector.interface_error ? E('p', { 'role': 'alert' }, _("Interface counters are temporarily unavailable.")) : E('span'),
-			(data.storage && data.storage.error) || (data.collector && data.collector.storage && data.collector.storage.error) ? E('p', { 'role': 'alert' }, _("Statistics storage maintenance failed. Check the capacity setting and available space.")) : E('span'),
+			classificationCoverage(data),
+			collectionDiagnostics(data, this.diagnosticsExpanded, L.bind(function(ev) { this.diagnosticsExpanded = ev.currentTarget.open; }, this)),
+			!data.device && !filtered ? this.interfacePanel(data) : E('span'),
 			E('section', { 'class': 'ns-section ns-apps' }, [
 				E('div', { 'class': 'ns-section-head' }, [ E('h3', {}, _("Application and website ranking")), E('div', { 'class': 'ns-legend' }, [ E('span', { 'class': 'download' }, _("Download")), E('span', { 'class': 'upload' }, _("Upload")) ]) ]),
-				applicationRows(applications, this.appPage, this.expandedApps, L.bind(this.refresh, this)),
+				applicationRows(applications, this.appPage, this.expandedApps, L.bind(this.refresh, this), L.bind(this.focusApplication, this), filtered),
 				pager(this.appPage, pages, L.bind(function(page) { this.expandedApps.clear(); this.appPage = page; this.refresh(); }, this))
 			]),
 			E('div', { 'class': 'ns-lower-grid' }, [
@@ -351,16 +647,18 @@ return view.extend({
 	},
 
 	refresh: function(force) {
+		if (this.searchTimer != null && force !== true) return this.refreshWorker || Promise.resolve();
 		var hours = Number(this.hoursSelect && this.hoursSelect.value || 0), device = this.deviceSelect && this.deviceSelect.value || '';
 		var order = this.currentSort();
 		var visible = new Set((this.currentData && this.currentData.applications || []).map(function(item) { return item.id; }));
 		var expanded = Array.from(this.expandedApps || []).filter(function(id) { return visible.has(id); });
-		var args = [hours, device, this.appPage || 1, this.devicePage || 1, order.key, order.direction, JSON.stringify(expanded)], key = JSON.stringify(args);
+		var args = [hours, device, this.appPage || 1, this.devicePage || 1, order.key, order.direction, JSON.stringify(expanded), this.identificationSelect && this.identificationSelect.value || '', this.searchTerm || '', this.applicationFilter || ''], key = JSON.stringify(args);
 		// Polls and repeated clicks share the same in-flight query. If filters
 		// change, wait for it and run only the latest requested combination.
 		// A successful settings write forces a fresh query after older reads.
 		if (this.refreshWorker && force !== true && this.refreshKey === key) return this.refreshWorker;
 		this.refreshKey = key;
+		if (this.queryNotice) dom.content(this.queryNotice, _("Updating results… Previous results remain visible until the query completes."));
 		this.pendingRefresh = { args: args, id: this.requestId = (this.requestId || 0) + 1 };
 		if (!this.refreshWorker) this.refreshWorker = this.runRefresh().finally(L.bind(function() { this.refreshWorker = null; }, this));
 		return this.refreshWorker;
@@ -374,25 +672,83 @@ return view.extend({
 			if (data.error) throw new Error(data.error);
 			this.appPage = data.app_page || 1; this.devicePage = data.device_page || 1;
 			this.currentData = data; this.paint();
+			this.paintUpdate();
+			this.updateFilterNotice();
 			if (!this.analysisApplying && data.control && data.control.applied && !data.control.apply_error) this.analysisError = '';
 			this.updateAnalysis(data);
 			if (this.storageUsage) dom.content(this.storageUsage, _("Current record storage: %s (including database and journal)").format(bytes(data.storage && data.storage.used_bytes)));
+			if (this.storageInput) {
+				var limit = storageLimitValue(data);
+				// Refresh repaired/external settings without replacing an unsaved draft.
+				if (this.storageInput.value === this.storageConfirmed) this.storageInput.value = limit;
+				this.storageConfirmed = limit;
+			}
 			if (this.errorNode) dom.content(this.errorNode, []);
+			if (this.queryNotice) dom.content(this.queryNotice, []);
 			this.updateDeviceChoices(data);
 		}, this)).catch(L.bind(function(error) {
-			if (requestId === this.requestId && this.errorNode) dom.content(this.errorNode, _("Refresh failed. The previous results have been kept. Please try again."));
+			if (requestId === this.requestId) {
+				if (this.errorNode) dom.content(this.errorNode, _("Refresh failed. The previous results have been kept. Please try again."));
+				if (this.queryNotice) dom.content(this.queryNotice, []);
+			}
 		}, this)).then(L.bind(function() {
 			if (this.pendingRefresh) return this.runRefresh();
 		}, this));
 	},
 
+	changeFilters: function(clearApplication) {
+		if (this.searchTimer != null) clearTimeout(this.searchTimer);
+		this.searchTimer = null;
+		this.searchTerm = (this.searchInput && this.searchInput.value || '').trim().slice(0, 128);
+		if (clearApplication === true) { this.applicationFilter = ''; this.applicationFilterName = ''; }
+		this.trendSelection = { bucket: null };
+		this.expandedApps.clear(); this.appPage = 1; this.devicePage = 1;
+		this.updateFilterNotice();
+		return this.refresh();
+	},
+
+	queueSearch: function() {
+		if (this.searchTimer != null) clearTimeout(this.searchTimer);
+		// Invalidate in-flight results immediately while the user edits. The
+		// debounce sends only the final input, and polls do not bypass it.
+		this.requestId = (this.requestId || 0) + 1;
+		this.pendingRefresh = null;
+		this.refreshKey = null;
+		if (this.queryNotice) dom.content(this.queryNotice, _("Updating results… Previous results remain visible until the query completes."));
+		this.searchTimer = setTimeout(L.bind(function() { this.changeFilters(true); }, this), 350);
+	},
+
+	focusApplication: function(item) {
+		this.applicationFilter = item.id;
+		this.applicationFilterName = applicationName(item);
+		return this.changeFilters();
+	},
+
+	updateFilterNotice: function() {
+		if (!this.filterNotice) return;
+		var children = [];
+		if (this.applicationFilter) children.push(
+			E('span', {}, _("Focused traffic: %s").format(this.applicationFilterName || this.applicationFilter)),
+			E('button', { 'type': 'button', 'class': 'btn cbi-button', 'click': L.bind(function() { return this.changeFilters(true); }, this) }, _("Clear traffic focus"))
+		);
+
+		dom.content(this.filterNotice, children);
+	},
+
 	updateDeviceChoices: function(data) {
 		if (!this.deviceSelect) return;
-		var selected = this.deviceSelect.value || '';
+		var selected = this.deviceSelect.value || '', search = (this.deviceSearchInput && this.deviceSearchInput.value || '').trim().toLowerCase();
 		var options = [E('option', { 'value': '' }, _("All devices"))];
-		var items = data.device_choices || [];
-		items.forEach(function(item) { options.push(E('option', { 'value': item.mac }, esc(item.name))); });
-		if (selected && !items.some(function(item) { return item.mac === selected; })) options.push(E('option', { 'value': selected }, selected));
+		var items = data.device_choices || [], selectedFound = false;
+		items.forEach(function(item) {
+			if (item.mac === selected) selectedFound = true;
+			if (item.mac !== selected && search && ![item.name, item.mac, item.ip].some(function(value) { return esc(value).toLowerCase().indexOf(search) >= 0; })) return;
+			var label = esc(item.name);
+			if (item.ip && item.ip !== item.name) label += ' · ' + esc(item.ip);
+			if (item.mac && item.mac !== item.name) label += ' · ' + esc(item.mac);
+			options.push(E('option', { 'value': item.mac }, label));
+		});
+		if (selected && !selectedFound) options.push(E('option', { 'value': selected }, selected));
 		dom.content(this.deviceSelect, options);
 		this.deviceSelect.value = selected;
 	},
@@ -439,10 +795,35 @@ return view.extend({
 .ns-root .ns-detail-grid { grid-template-columns:minmax(0,1fr); }
 .ns-root .ns-detail-grid section>div { max-height:360px; overflow-y:auto; }
 .ns-root .ns-range { font-size:12px; opacity:.8; }
+.ns-root .ns-classification, .ns-root .ns-evidence { overflow-wrap:anywhere; }
+.ns-root .ns-evidence+.ns-evidence { border-top:1px solid rgba(127,127,127,.16); margin-top:8px; }
+.ns-root .ns-history-selector { display:block; margin:12px 0; }
+.ns-root .ns-coverage-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; }
+.ns-root .ns-coverage-item { min-width:0; overflow-wrap:anywhere; }
+.ns-root .ns-coverage-value { margin-top:6px; font-size:12px; font-variant-numeric:tabular-nums; }
+.ns-root .ns-coverage-bar { height:6px; margin-top:8px; background:rgba(127,127,127,.16); border-radius:3px; overflow:hidden; }
+.ns-root .ns-coverage-bar>span { display:block; height:100%; background:#4d9de0; }
+.ns-root .ns-coverage-domain .ns-coverage-bar>span { background:#689b73; }
+.ns-root .ns-coverage-protocol .ns-coverage-bar>span { background:#c68b45; }
+.ns-root .ns-coverage-unknown .ns-coverage-bar>span { background:#888; }
 .ns-root .ns-pager button { min-height:44px; min-width:40px; }
+.ns-root .ns-field input { min-width:0; max-width:100%; }
+.ns-root .ns-diagnostics summary { cursor:pointer; line-height:1.6; }
+.ns-root .ns-diagnostic-counts { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+.ns-root .ns-diagnostic-counts dt { font-size:12px; }
+.ns-root .ns-diagnostic-counts dd { margin:4px 0; font-weight:600; }
+.ns-root .ns-diagnostic-issue { border-top:1px solid rgba(127,127,127,.16); }
+.ns-root .ns-diagnostic-issue pre { white-space:pre-wrap; overflow-wrap:anywhere; }
+.ns-root .ns-filter-notice { display:flex; align-items:center; flex-wrap:wrap; gap:10px; }
+.ns-root .ns-filter-notice p { flex-basis:100%; }
+.ns-root .ns-update-actions { display:flex; gap:10px; flex-wrap:wrap; }
+.ns-root .ns-update-detail { white-space:pre-wrap; overflow-wrap:anywhere; max-height:240px; overflow:auto; }
 @media(max-width:720px) {
+ .ns-root .ns-coverage-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
  .ns-root .ns-toolbar { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
  .ns-root .ns-field { min-width:0; }
+ .ns-root .ns-diagnostic-counts { grid-template-columns:repeat(2,minmax(0,1fr)); }
+ .ns-root .ns-field input { width:100%; min-height:44px; font-size:16px; }
  .ns-root .ns-field select { width:100%; min-width:0; max-width:100%; min-height:44px; font-size:16px; }
  .ns-root .ns-refresh { grid-column:1/-1; min-height:44px; }
  .ns-root .ns-stats { grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
@@ -477,14 +858,22 @@ return view.extend({
 `));
 		var rerender = L.bind(function() { this.expandedApps.clear(); this.appPage = 1; this.devicePage = 1; this.refresh(); }, this);
 		var controls = E('div', { 'class': 'ns-toolbar' }, [
-			E('div', { 'class': 'ns-field' }, [ E('label', {}, _("Time range")), E('select', { 'id': 'ns-hours', 'change': L.bind(function() { this.trendSelection = { bucket: null }; this.expandedApps.clear(); this.appPage = 1; this.devicePage = 1; return this.refresh(); }, this) }, [ E('option', { 'value': '0', 'selected': '' }, _("All")), E('option', { 'value': '1' }, _("Last 1 hour")), E('option', { 'value': '5' }, _("Last 5 hours")), E('option', { 'value': '24' }, _("Last 24 hours")), E('option', { 'value': '168' }, _("Last 7 days")) ]) ]),
-			E('div', { 'class': 'ns-field' }, [ E('label', {}, _("Device")), E('select', { 'id': 'ns-device', 'change': L.bind(function() { this.trendSelection = { bucket: null }; this.expandedApps.clear(); this.appPage = 1; this.devicePage = 1; return this.refresh(); }, this) }, [ E('option', { 'value': '' }, _("All devices")) ]) ]),
-			E('div', { 'class': 'ns-field' }, [ E('label', {}, _("Sort by")), E('select', { 'id': 'ns-sort', 'change': rerender }, [ E('option', { 'value': 'total' }, _("Total traffic")), E('option', { 'value': 'download' }, _("Download")), E('option', { 'value': 'upload' }, _("Upload")), E('option', { 'value': 'flows' }, _("Connections")) ]) ]),
+			E('div', { 'class': 'ns-field' }, [ E('label', {}, _("Time range")), E('select', { 'id': 'ns-hours', 'change': L.bind(function() { return this.changeFilters(); }, this) }, [ E('option', { 'value': '0', 'selected': '' }, _("All")), E('option', { 'value': '1' }, _("Last 1 hour")), E('option', { 'value': '5' }, _("Last 5 hours")), E('option', { 'value': '24' }, _("Last 24 hours")), E('option', { 'value': '168' }, _("Last 7 days")) ]) ]),
+			E('div', { 'class': 'ns-field' }, [ E('label', {}, _("Device")), E('select', { 'id': 'ns-device', 'change': L.bind(function() { return this.changeFilters(); }, this) }, [ E('option', { 'value': '' }, _("All devices")) ]) ]),
+			E('div', { 'class': 'ns-field' }, [ E('label', { 'for': 'ns-device-search' }, _("Find a device")), E('input', { 'id': 'ns-device-search', 'type': 'search', 'maxlength': '128', 'placeholder': _("Name, MAC or IP address"), 'input': L.bind(function() { this.updateDeviceChoices(this.currentData); }, this) }) ]),
+			E('div', { 'class': 'ns-field' }, [ E('label', { 'for': 'ns-identification' }, _("Identification level")), E('select', { 'id': 'ns-identification', 'change': L.bind(function() { return this.changeFilters(true); }, this) }, [
+				E('option', { 'value': '' }, _("All identification levels")), E('option', { 'value': 'application' }, _("Application identified")),
+				E('option', { 'value': 'domain' }, _("Domain or infrastructure only")), E('option', { 'value': 'protocol' }, _("Protocol only")), E('option', { 'value': 'unknown' }, _("Unidentified"))
+			]) ]),
+			E('div', { 'class': 'ns-field' }, [ E('label', { 'for': 'ns-search' }, _("Find application or domain")), E('input', { 'id': 'ns-search', 'type': 'search', 'maxlength': '128', 'input': L.bind(this.queueSearch, this), 'keydown': L.bind(function(ev) { if (ev.key === 'Enter') { ev.preventDefault(); return this.changeFilters(true); } }, this) }) ]),
+			E('div', { 'class': 'ns-field' }, [ E('label', {}, _("Sort by")), E('select', { 'id': 'ns-sort', 'change': rerender }, [ E('option', { 'value': 'total' }, _("Total traffic")), E('option', { 'value': 'download' }, _("Download")), E('option', { 'value': 'upload' }, _("Upload")), E('option', { 'value': 'flows' }, _("Hourly active connections")) ]) ]),
 			E('div', { 'class': 'ns-field' }, [ E('label', {}, _("Order")), E('select', { 'id': 'ns-order', 'change': rerender }, [ E('option', { 'value': 'desc' }, _("Highest first")), E('option', { 'value': 'asc' }, _("Lowest first")) ]) ]),
-			E('button', { 'class': 'btn cbi-button cbi-button-action ns-refresh', 'click': L.bind(this.refresh, this) }, _("Refresh"))
+			E('button', { 'class': 'btn cbi-button cbi-button-action ns-refresh', 'click': L.bind(function() { return this.searchTimer != null ? this.changeFilters(true) : this.refresh(); }, this) }, _("Refresh"))
 		]);
-		var content = E('div', { 'id': 'ns-content' }), root = E('div', {}, [ style, E('h2', {}, _("DPI Traffic Analysis")), controls, content ]);
-		this.analysisToggle = E('input', { 'type': 'checkbox', 'role': 'switch', 'class': 'ns-switch', 'checked': data.enabled !== false ? '' : null, 'change': L.bind(function(ev) {
+		this.queryNotice = E('p', { 'class': 'ns-query-notice', 'role': 'status' });
+		this.filterNotice = E('div', { 'class': 'ns-filter-notice', 'role': 'status' });
+		var content = E('div', { 'id': 'ns-content' }), root = E('div', {}, [ style, E('h2', {}, _("DPI Traffic Analysis")), controls, this.filterNotice, this.queryNotice, content ]);
+		this.analysisToggle = E('input', { 'type': 'checkbox', 'role': 'switch', 'class': 'ns-switch', 'checked': data.enabled === true ? '' : null, 'change': L.bind(function(ev) {
 			return this.applyAnalysis(ev.currentTarget.checked);
 		}, this) });
 		root.insertBefore(E('label', { 'class': 'ns-controls', 'style': 'min-height:44px;align-items:center' }, [this.analysisToggle, _("Traffic analysis")]), controls);
@@ -494,7 +883,8 @@ return view.extend({
 			return this.applyAnalysis(control ? control.enabled : this.currentData.enabled !== false);
 		}, this) }, _("Retry applying"));
 		root.insertBefore(E('div', {}, [this.analysisNotice, this.analysisRetry]), controls);
-		var storageInput = E('input', { 'type': 'number', 'min': '0', 'max': '4096', 'step': '1', 'value': String(data.storage && data.storage.max_storage_mib || 0), 'aria-label': _("Record storage limit in MiB") });
+		var storageInput = E('input', { 'type': 'number', 'min': '0', 'max': '4096', 'step': '1', 'value': storageLimitValue(data), 'aria-label': _("Record storage limit in MiB") });
+		this.storageInput = storageInput; this.storageConfirmed = storageInput.value;
 		var storageMessage = E('p', { 'role': 'status' });
 		this.storageUsage = E('p', { 'class': 'ns-range' }, _("Current record storage: %s (including database and journal)").format(bytes(data.storage && data.storage.used_bytes)));
 		var storageSave = E('button', { 'type': 'button', 'class': 'btn cbi-button', 'click': L.bind(function() {
@@ -516,12 +906,16 @@ return view.extend({
 			E('div', { 'class': 'ns-controls' }, [ E('label', {}, [ _("Record limit (MiB)") + ' ', storageInput ]), storageSave ]),
 			E('p', { 'class': 'ns-range' }, _("0 means unlimited. At the limit, the oldest hours are removed first. Writes may temporarily exceed the limit. Records stay in memory and are cleared on reboot; the capacity setting is kept.")), storageMessage
 		]));
+		this.updatePanel = E('section', { 'class': 'ns-section ns-update-panel' });
+		root.appendChild(this.updatePanel);
 		root.classList.add('ns-root');
 		this.errorNode = E('p', { 'role': 'alert' });
 		root.insertBefore(this.errorNode, content);
 		this.hoursSelect = controls.querySelector('#ns-hours'); this.deviceSelect = controls.querySelector('#ns-device'); this.sortSelect = controls.querySelector('#ns-sort'); this.orderSelect = controls.querySelector('#ns-order'); this.contentNode = content; this.currentData = data; this.appPage = 1;
+		this.identificationSelect = controls.querySelector('#ns-identification'); this.searchInput = controls.querySelector('#ns-search'); this.deviceSearchInput = controls.querySelector('#ns-device-search');
 		this.updateDeviceChoices(data);
 		this.updateAnalysis(data);
+		this.paintUpdate();
 		this.paint(); poll.add(L.bind(this.refresh, this), 30); return root;
 	},
 

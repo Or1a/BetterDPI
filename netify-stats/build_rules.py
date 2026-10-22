@@ -18,9 +18,76 @@ NEXTDNS_ALLOWLIST = {
     'pinterest': ('pinterest', ('pinterest.biz', 'pinterest.com.pt')),
     'snapchat': ('snap', ('sc-jpl.com', 'sc-prod.net')),
     'steam': ('steam', ('poweredbysteam.net', 'steamgames.net')),
-    'tiktok': ('tiktok', ('tiktokshop.com',)),
+    'tiktok': ('tiktok', ('tiktokshop.com', 'tiktok-eu.net', 'tiktok-row.net',
+                         'tiktok-us.net', 'tiktokglobalshopv.com', 'tiktokv.eu',
+                         'tiktokv.us', 'tiktokw.eu', 'tiktokw.us')),
     'tinder': ('tinder', ('gotinder.com', 'tinder.com', 'tindersparks.com')),
 }
+
+# Selected standalone entries in DLC's AI category files have no service file
+# of their own. Assign only reviewed service domains; never import an entire
+# category, its includes, or a shared hosting suffix as an application.
+REVIEWED_DLC_SERVICES = {
+    'category-ai-cn': {
+        'qwen': ('Qwen', ('qianwen.com', 'qianwenai.com', 'qwen.ai', 'qwenlm.ai', 'tongyi.com')),
+        'kimi': ('Kimi / Moonshot', ('kimi.com', 'moonshot.cn')),
+        'zhipu': ('Zhipu / GLM', ('bigmodel.cn', 'chatglm.cn', 'z.ai', 'zhipuai.cn', 'zhipucn.com')),
+        'minimax': ('MiniMax / Hailuo', ('hailuoai.com', 'minimaxi.com', 'xingyeai.com')),
+        'kling': ('Kling AI', ('kechuangai.com', 'kling-ai.com', 'klingai.com')),
+        'metaso': ('Metaso', ('metaso.cn', 'xiezuocat.com', 'meta.law')),
+        'tiangong': ('Tiangong AI', ('tiangong.cn',)),
+        'liblib': ('LibLibAI', ('liblib.art', 'liblib.cloud', 'liblib.tv')),
+        'baichuan': ('Baichuan AI', ('baichuan-ai.com',)),
+        'codebuddy': ('CodeBuddy / WorkBuddy', ('codebuddy.cn', 'workbuddy.cn')),
+    },
+    'category-ai-!cn': {
+        'kimi': ('Kimi / Moonshot', ('kimi.ai', 'moonshot.ai')),
+        'minimax': ('MiniMax / Hailuo', ('minimax.io',)),
+        'midjourney': ('Midjourney', ('midjourney.com',)),
+        'ollama': ('Ollama', ('ollama.com',)),
+        'mistral': ('Mistral AI', ('mistral.ai',)),
+        'openrouter': ('OpenRouter', ('openrouter.ai',)),
+        'cohere': ('Cohere', ('cohere.ai', 'cohere.com')),
+        'lmstudio': ('LM Studio', ('lmstudio.ai',)),
+        'dify': ('Dify', ('dify.ai',)),
+        'langchain': ('LangChain', ('langchain.com',)),
+        'anythingllm': ('AnythingLLM', ('anythingllm.com',)),
+        'crewai': ('CrewAI', ('crewai.com',)),
+        'devin': ('Devin', ('devin.ai',)),
+        'deepwiki': ('DeepWiki', ('deepwiki.com', 'deepwiki.org')),
+        'openclaw': ('OpenClaw', ('openclaw.ai',)),
+        'opencode': ('OpenCode', ('opencode.ai',)),
+        'jasper': ('Jasper / Clipdrop', ('jasper.ai', 'clipdrop.co')),
+        'lovart': ('Lovart', ('lovart.ai',)),
+        'novelai': ('NovelAI', ('novelai.net',)),
+        'tripo3d': ('Tripo AI', ('tripo3d.ai',)),
+        'h2o-ai': ('H2O.ai', ('h2o.ai',)),
+    },
+}
+
+
+def has_ownership(domain, exact, suffix):
+    parts = domain.split('.')
+    return (domain in exact or any('.'.join(parts[i:]) in suffix for i in range(len(parts)-1))
+            or any(key.endswith('.' + domain) for table in (exact, suffix) for key in table))
+
+
+def add_reviewed_dlc(source, exact, suffix, labels):
+    added = {}
+    for filename, services in REVIEWED_DLC_SERVICES.items():
+        fields = [line.split('#', 1)[0].split() for line in
+                  (source / 'data' / filename).read_text().splitlines()]
+        tokens = {parts[0] for parts in fields if parts and '@ads' not in parts}
+        for tag, (label, domains) in services.items():
+            for domain in domains:
+                if domain not in tokens and 'domain:' + domain not in tokens:
+                    raise ValueError('reviewed domain missing from pinned DLC source: ' + domain)
+                if has_ownership(domain, exact, suffix):
+                    continue
+                suffix[domain] = {tag}
+                labels[tag] = label
+                added[domain] = filename
+    return added
 
 
 def source_revision(source, revision):
@@ -39,13 +106,10 @@ def add_nextdns(source, exact, suffix, labels):
         for domain in allowlist:
             if domain not in domains:
                 raise ValueError('reviewed domain missing from pinned NextDNS source: ' + domain)
-            parts = domain.split('.')
             # Existing exact/parent suffix rules retain priority even when
             # ambiguous. Existing child rules likewise prevent a new broader
             # suffix from filling their intentionally unresolved branches.
-            if domain in exact or any('.'.join(parts[i:]) in suffix for i in range(len(parts)-1)):
-                continue
-            if any(key.endswith('.' + domain) for table in (exact, suffix) for key in table):
+            if has_ownership(domain, exact, suffix):
                 continue
             suffix[domain] = {tag}
             labels.setdefault(tag, tag.replace('-', ' ').title())
@@ -78,6 +142,7 @@ def build(source, destination, revision=None, nextdns_source=None, nextdns_revis
             target.setdefault(domain, set()).add(tag)
             labels[tag] = tag.replace('-', ' ').title()
     labels.update({'openai': 'OpenAI / ChatGPT', 'douyin': '抖音', 'wechat': '微信', 'tencent': '腾讯', 'bilibili': '哔哩哔哩', 'huawei': '华为', 'xiaomi': '小米', 'jd': '京东', 'taobao': '淘宝'})
+    reviewed = add_reviewed_dlc(source, exact, suffix, labels)
     sources = [{'id': 'dlc', 'name': 'DLC', 'repo': 'https://github.com/v2fly/domain-list-community',
                 'revision': revision, 'license': 'MIT', 'license_file': 'COMMUNITY-LICENSE',
                 'rules': len(exact) + len(suffix)}]
@@ -93,6 +158,7 @@ def build(source, destination, revision=None, nextdns_source=None, nextdns_revis
     compiled = {'schema': 1, 'source': 'https://github.com/v2fly/domain-list-community',
                 'revision': revision, 'license': 'MIT', 'labels': labels,
                 'sources': sources, 'default_rule_source': 'dlc',
+                'reviewed_rule_files': reviewed,
                 'rule_sources': {'exact': {}, 'suffix': extra},
                 'exact': {k: sorted(v) for k, v in exact.items()},
                 'suffix': {k: sorted(v) for k, v in suffix.items()}, 'skipped': skipped}

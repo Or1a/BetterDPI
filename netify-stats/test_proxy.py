@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from unittest.mock import patch
 
 import netify_collector as collector
+import netify_storage as storage
 from netify_proxy import RedirectMap
 
 
@@ -34,6 +35,19 @@ class ProxyTest(unittest.TestCase):
         return {'interface': interface, 'internal': True, 'flow': {
             'digest': digest, 'other_type': 'remote', 'local_mac': 'bb:bb:bb:bb:bb:bb',
             'local_ip': '10.1.1.2', 'other_ip': '203.0.113.4'}}
+
+    def fill_and_prune_hour(self, instance, bucket):
+        instance.db.executemany('INSERT INTO hourly VALUES (?,?,?,?,?,?,?,?,?)',
+            ((bucket, 'fillmac', '10.1.1.3', 'Unknown', 'TLS',
+              '%06d.' % i + '.'.join(['a'*60]*3) + '.example', 1, 1, 1)
+             for i in range(25000)))
+        instance.db.commit()
+        with patch.object(storage, 'read_limit', return_value=4):
+            for _ in range(40):
+                instance.storage.maintain()
+                if instance.storage.pruned_hours:
+                    break
+        self.assertGreater(instance.storage.pruned_hours, 0)
 
     def test_mapping_direction_and_no_double_count(self):
         line = 'ipv4 2 tcp 6 100 src=10.1.1.2 dst=203.0.113.4 sport=12345 dport=443 packets=1 bytes=10 src=10.1.1.1 dst=10.1.1.2 sport=7892 dport=12345 packets=1 bytes=20'
@@ -69,6 +83,37 @@ class ProxyTest(unittest.TestCase):
             instance.update_metadata({'internal':True,'flow':dict(translated,digest='ssh',local_port=22)})
             self.assertIn(('', 'ssh'), instance.excluded)
             instance.db.close()
+
+    def test_metadata_keeps_observed_domain_and_protocol_until_purge(self):
+        with self.collector() as instance:
+            message = self.metadata('known')
+            message['flow'].update(ip_protocol=17, host_server_name='API.KIMI.COM',
+                                   detected_protocol_name='QUIC', detected_application_name='native.app')
+            instance.update_metadata(message)
+            less = self.metadata('known')
+            less['flow'].update(ip_protocol=17, detected_application_name='unclassified')
+            instance.update_metadata(less)
+            instance.add_stats(self.stats('known'), received_at=7201)
+            self.assertEqual(instance.db.execute('SELECT application,protocol,host FROM hourly').fetchone(),
+                             ('native.app', 'QUIC', 'api.kimi.com'))
+            # A newly observed valid hostname can replace prior evidence.
+            message['flow']['host_server_name'] = 'new.example'
+            instance.update_metadata(message)
+            self.assertEqual(instance.flows[('br-lan', 'known')]['host'], 'new.example')
+            instance.add_stats(self.stats('known', kind='flow_purge'), received_at=7202)
+            instance.update_metadata(less)
+            self.assertEqual(instance.flows[('br-lan', 'known')]['host'], '203.0.113.4')
+            self.assertEqual(instance.flows[('br-lan', 'known')]['protocol'], 'UDP')
+
+    def test_metadata_transport_fallback_and_dns_hostname_do_not_guess_apps(self):
+        with self.collector() as instance:
+            for number, expected in ((6, 'TCP'), (17, 'UDP'), (1, 'Unknown')):
+                message = self.metadata(str(number))
+                message['flow'].update(ip_protocol=number, detected_protocol_name='unclassified',
+                                       host_server_name='192.0.2.3', dns_host_name='real.example')
+                _, meta = instance.normalize_metadata(message)
+                self.assertEqual((meta['application'], meta['protocol'], meta['host']),
+                                 ('Unknown', expected, 'real.example'))
 
     def test_ipv6_mapping(self):
         line = 'ipv6 10 tcp 6 100 src=2001:db8::2 dst=2001:db8:1::4 sport=12345 dport=443 src=2001:db8::1 dst=2001:db8::2 sport=7892 dport=12345'
@@ -129,6 +174,125 @@ class ProxyTest(unittest.TestCase):
                 'SELECT SUM(upload), SUM(download), SUM(flows) FROM hourly'
             ).fetchone(), (100, 200, 1))
             self.assertEqual(instance.upload, 100)
+
+    def test_late_correction_never_resurrects_a_capacity_pruned_hour(self):
+        line = ('ipv4 2 tcp 6 100 src=10.1.1.2 dst=203.0.113.4 '
+                'sport=12345 dport=443 src=10.1.1.1 dst=10.1.1.2 '
+                'sport=7892 dport=12345')
+        original = dict(self.metadata('original')['flow'], ip_protocol=6,
+                        local_port=12345, other_port=443,
+                        other_mac='aa:aa:aa:aa:aa:aa')
+        translated = dict(original, digest='redirect', other_ip='10.1.1.1',
+                          other_port=7892, other_type='local')
+        with self.collector() as instance, patch.object(collector.time, 'time', return_value=7198):
+            instance.update_metadata({'interface':'br-lan', 'internal':True, 'flow':original})
+            instance.add_stats(self.stats('original'))
+            # Real capacity maintenance removes the old hour while a newer
+            # contribution from the same connection remains available.
+            instance.add_stats(self.stats('original'), received_at=7201)
+            self.fill_and_prune_hour(instance, 3600)
+            self.assertEqual(instance.db.execute('SELECT DISTINCT bucket FROM hourly').fetchall(), [(7200,)])
+            with patch.object(collector.time, 'time', return_value=7202):
+                instance.proxy.entries = dict(RedirectMap.parse(line, {7892}))
+                instance.update_metadata({'interface':'br-lan', 'internal':True, 'flow':translated})
+                instance.add_stats(self.stats('redirect'))
+            self.assertEqual(instance.db.execute(
+                'SELECT bucket,SUM(upload),SUM(download),SUM(flows) FROM hourly GROUP BY bucket'
+            ).fetchall(), [(7200, 100, 200, 1)])
+            self.assertEqual(instance.db.execute(
+                'SELECT COUNT(*) FROM hourly WHERE upload<0 OR download<0 OR flows<0'
+            ).fetchone()[0], 0)
+            # Session totals include pruned history and still correct both
+            # original upload deltas; retained-history totals are independent.
+            self.assertEqual((instance.upload, instance.download), (100, 400))
+
+    def test_current_hour_cleanup_recounts_each_still_active_flow_once(self):
+        with self.collector() as instance:
+            for digest in ('first', 'second'):
+                instance.update_metadata(self.metadata(digest))
+                instance.add_stats(self.stats(digest), received_at=7201)
+            self.fill_and_prune_hour(instance, 7200)
+            self.assertEqual(instance.db.execute('SELECT COUNT(*) FROM hourly').fetchone()[0], 0)
+            for digest in ('first', 'second', 'first'):
+                instance.add_stats(self.stats(digest), received_at=7202)
+            self.assertEqual(instance.db.execute(
+                'SELECT SUM(upload),SUM(download),SUM(flows) FROM hourly'
+            ).fetchone(), (300, 600, 2))
+
+    def test_retention_invalidates_writer_ids_before_another_device_reuses_them(self):
+        with self.collector() as instance:
+            instance.update_metadata(self.metadata('original'))
+            instance.add_stats(self.stats('original'), received_at=7201)
+            old_id = instance.db.execute(
+                'SELECT id FROM traffic_devices WHERE mac=?', ('bb:bb:bb:bb:bb:bb',)
+            ).fetchone()[0]
+            self.fill_and_prune_hour(instance, 7200)
+            self.assertIsNone(instance.db.execute(
+                'SELECT 1 FROM traffic_devices WHERE id=?', (old_id,)
+            ).fetchone())
+            # Reuse the freed device ID while the collector still holds its
+            # original metadata; cached dimension IDs must not relabel bytes.
+            instance.db.execute('INSERT INTO traffic_devices(id,mac,ip) VALUES (?,?,?)',
+                                (old_id, 'cc:cc:cc:cc:cc:cc', '10.1.1.3'))
+            instance.db.execute('INSERT INTO hourly VALUES (?,?,?,?,?,?,?,?,?)',
+                (7200, 'cc:cc:cc:cc:cc:cc', '10.1.1.3', 'other-app', 'UDP', 'other.example', 7, 9, 1))
+            instance.add_stats(self.stats('original'), received_at=7202)
+            self.assertEqual(instance.db.execute(
+                'SELECT mac,SUM(upload),SUM(download),SUM(flows) FROM hourly GROUP BY mac ORDER BY mac'
+            ).fetchall(), [('bb:bb:bb:bb:bb:bb', 100, 200, 1), ('cc:cc:cc:cc:cc:cc', 7, 9, 1)])
+
+    def test_current_hour_proxy_recreation_corrects_only_retained_contributions(self):
+        line = ('ipv4 2 tcp 6 100 src=10.1.1.2 dst=203.0.113.4 '
+                'sport=12345 dport=443 src=10.1.1.1 dst=10.1.1.2 '
+                'sport=7892 dport=12345')
+        original = dict(self.metadata('original')['flow'], ip_protocol=6,
+                        local_port=12345, other_port=443,
+                        other_mac='aa:aa:aa:aa:aa:aa')
+        translated = dict(original, digest='redirect', other_ip='10.1.1.1',
+                          other_port=7892, other_type='local')
+        with self.collector() as instance, patch.object(collector.time, 'time', return_value=7198):
+            instance.update_metadata({'interface':'br-lan', 'internal':True, 'flow':original})
+            instance.add_stats(self.stats('original'))
+            self.fill_and_prune_hour(instance, 3600)
+            self.assertEqual(instance.db.execute('SELECT COUNT(*) FROM hourly').fetchone()[0], 0)
+            # A new row now has only 100 bytes, although this collection
+            # session saw 200 original bytes. Subtracting 200 would underflow.
+            instance.add_stats(self.stats('original'), received_at=7199)
+            instance.proxy.entries = dict(RedirectMap.parse(line, {7892}))
+            instance.update_metadata({'interface':'br-lan', 'internal':True, 'flow':translated})
+            instance.add_stats(self.stats('redirect'), received_at=7199)
+            self.assertEqual(instance.db.execute(
+                'SELECT SUM(upload),SUM(download),SUM(flows) FROM hourly'
+            ).fetchone(), (100, 200, 1))
+            self.assertEqual((instance.upload, instance.download), (100, 400))
+
+    def test_temporary_dedup_keeps_completed_flows_exact_and_interface_scoped(self):
+        with self.collector() as instance:
+            for index in range(5000):
+                digest = 'completed-%d' % index
+                instance.update_metadata(self.metadata(digest))
+                instance.add_stats(self.stats(digest, kind='flow_purge'), received_at=7201)
+            self.assertEqual(instance.flows, {})
+            # Reloaded metadata, as after a reconnect, must not count this
+            # already-completed flow twice in the same hour.
+            instance.update_metadata(self.metadata('completed-0'))
+            instance.add_stats(self.stats('completed-0'), received_at=7202)
+            instance.update_metadata(self.metadata('completed-0', interface='guest'))
+            instance.add_stats(self.stats('completed-0', interface='guest'), received_at=7202)
+            self.assertEqual(instance.db.execute('SELECT SUM(flows) FROM hourly').fetchone()[0], 5001)
+            self.assertEqual(instance.db.execute('SELECT COUNT(*) FROM temp.seen_flows').fetchone()[0], 5001)
+            # This state belongs only to this collector, never to historical
+            # package schema or a second read-only query connection.
+            self.assertIsNone(instance.db.execute(
+                "SELECT 1 FROM main.sqlite_master WHERE name='seen_flows'"
+            ).fetchone())
+            self.assertEqual(instance.db.execute('PRAGMA temp_store').fetchone()[0], 1)
+            self.assertEqual(instance.db.execute('PRAGMA temp.cache_size').fetchone()[0], -256)
+            instance.add_stats(self.stats('completed-0'), received_at=10860)
+            self.assertEqual(instance.db.execute(
+                'SELECT DISTINCT bucket FROM temp.seen_flows'
+            ).fetchall(), [(10800,)])
+            self.assertEqual(instance.db.execute('SELECT SUM(flows) FROM hourly').fetchone()[0], 5002)
 
     def test_late_redirect_mapping_recovers_both_orientations_without_export(self):
         line = 'ipv4 2 tcp 6 100 src=10.1.1.2 dst=203.0.113.4 sport=12345 dport=443 src=10.1.1.1 dst=10.1.1.2 sport=7892 dport=12345'
@@ -266,6 +430,41 @@ class ProxyTest(unittest.TestCase):
             self.assertEqual(len(instance.pending_stats), 0)
             self.assertEqual(instance.db.execute('SELECT COUNT(*) FROM hourly').fetchone()[0], 0)
 
+    def test_recovery_deadline_uses_elapsed_time_and_keeps_arrival_hour(self):
+        with self.collector() as instance:
+            with patch.object(collector.time, 'time', return_value=7199), \
+                    patch.object(collector.time, 'monotonic', return_value=10):
+                instance.add_stats(self.stats('recover'))
+                instance.add_stats(self.stats('expire'))
+            # A clock jump does not expire fresh socket deltas.
+            with patch.object(collector.time, 'time', return_value=7199+86400), \
+                    patch.object(collector.time, 'monotonic', return_value=20):
+                instance.recover_metadata()
+                self.assertEqual(len(instance.pending_stats), 2)
+                instance.update_metadata(self.metadata('recover'))
+            self.assertEqual(instance.db.execute(
+                'SELECT bucket,upload,download FROM hourly'
+            ).fetchall(), [(3600, 100, 200)])
+            # A backwards clock step does not extend the sixty-second window.
+            with patch.object(collector.time, 'time', return_value=100), \
+                    patch.object(collector.time, 'monotonic', return_value=70):
+                instance.recover_metadata()
+            self.assertEqual(len(instance.pending_stats), 0)
+            self.assertEqual((instance.unattributed_upload, instance.unattributed_download), (100, 200))
+
+    def test_candidate_expiry_is_not_extended_by_clock_rollback(self):
+        original = dict(self.metadata('original')['flow'], ip_protocol=6,
+                        local_port=12345, other_port=443)
+        with self.collector() as instance:
+            with patch.object(collector.time, 'time', return_value=10000), \
+                    patch.object(collector.time, 'monotonic', return_value=10):
+                instance.update_metadata({'interface':'br-lan', 'internal':True, 'flow':original})
+            self.assertEqual(len(instance.original_candidates), 1)
+            with patch.object(collector.time, 'time', return_value=100), \
+                    patch.object(collector.time, 'monotonic', return_value=71):
+                instance.expire_original_candidates()
+            self.assertEqual(len(instance.original_candidates), 0)
+
     def test_late_hour_does_not_reset_flow_counts_or_latest_device(self):
         with self.collector() as instance:
             instance.update_metadata(self.metadata('active'))
@@ -282,6 +481,31 @@ class ProxyTest(unittest.TestCase):
                              [(3600, 2, 200, 400), (7200, 1, 200, 400)])
             instance.add_stats(self.stats('active'), received_at=7260)
             self.assertEqual(set(instance.seen), {7200})
+
+    def test_clock_rollback_does_not_recount_every_delta_or_lose_future_keys(self):
+        with self.collector() as instance:
+            instance.update_metadata(self.metadata('active'))
+            for timestamp in (10801, 7201, 7202, 7203, 10802):
+                instance.add_stats(self.stats('active'), received_at=timestamp)
+            self.assertEqual(instance.db.execute(
+                'SELECT bucket,SUM(upload),SUM(download),SUM(flows) FROM hourly GROUP BY bucket'
+            ).fetchall(), [(7200, 300, 600, 1), (10800, 200, 400, 1)])
+
+    def test_pre_rollback_pending_replay_does_not_expire_current_flow_dedup(self):
+        with self.collector() as instance:
+            with patch.object(collector.time, 'time', return_value=36001):
+                instance.add_stats(self.stats('future'))
+            self.assertEqual(instance.seen_latest, 36001)
+            with patch.object(collector.time, 'time', return_value=7201):
+                instance.update_metadata(self.metadata('current'))
+                instance.add_stats(self.stats('current'))
+            with patch.object(collector.time, 'time', return_value=7202):
+                instance.update_metadata(self.metadata('future'))
+                self.assertEqual(instance.seen_latest, 7201)
+                instance.add_stats(self.stats('current'))
+            self.assertEqual(instance.db.execute(
+                'SELECT bucket,SUM(upload),SUM(download),SUM(flows) FROM hourly GROUP BY bucket'
+            ).fetchall(), [(7200, 200, 400, 1), (36000, 100, 200, 1)])
 
 
 if __name__ == '__main__':

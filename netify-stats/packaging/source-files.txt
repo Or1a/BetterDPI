@@ -14,6 +14,7 @@ netify_proxy.py
 netify_query.py
 netify_rpc.py
 netify_storage.py
+netify_update.py
 netifyd.conf
 po/zh_Hans/netify-stats.po
 po/zh_Hant/netify-stats.po
@@ -26,6 +27,7 @@ rules/README.md
 rules/NEXTDNS-LICENSE
 rules/community-rules.json
 packaging/check_preparation.py
+packaging/build_update_manifest.py
 packaging/netify-stats.keep
 packaging/post-install
 packaging/pre-deinstall
@@ -38,11 +40,19 @@ test_preparation.py
 test_proxy.py
 test_query.py
 test_rules.py
+test_classification.py
+test_filtering.py
 test_stats.py
 test_storage.py
+test_update.py
+test_update_manifest.py
 test_logic.cjs
 test_interface_ui.cjs
 test_settings_ui.cjs
 test_ui_helpers.cjs
 test_i18n_ui.cjs
+test_classification_ui.cjs
+test_diagnostics_ui.cjs
+test_filter_ui.cjs
+test_update_ui.cjs
 reproduce_late_original.py

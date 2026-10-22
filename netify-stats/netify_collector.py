@@ -8,11 +8,12 @@ import time
 import glob
 import select
 import sys
+import re
 from collections import OrderedDict
 
 sys.path.insert(0, '/usr/lib/netify-stats')
 from netify_accounting import InterfaceAccounting
-from netify_storage import compact_schema, record_hourly, StoragePolicy
+from netify_storage import compact_schema, correct_hourly, HourlyWriter, StoragePolicy
 from netify_proxy import RedirectMap
 
 
@@ -24,6 +25,15 @@ STATUS_PATH = os.path.join(RUNTIME_DIR, "status.json")
 EXPORT_PATH = '/var/run/netifyd/sink-request.json'
 PENDING_LIMIT = 4096
 PENDING_TTL = 60
+HOST_PATTERN = re.compile(r'[a-z0-9_-]+(?:\.[a-z0-9_-]+)+', re.I)
+TRANSPORT_NAMES = {6: 'TCP', 17: 'UDP'}
+
+
+def host_rank(value):
+    """Prefer an observed domain to an address/placeholder, without DNS I/O."""
+    value = value.strip().rstrip('.')
+    return int(len(value) <= 253 and HOST_PATTERN.fullmatch(value) is not None
+               and not all(char in '0123456789.' for char in value))
 
 
 class Collector:
@@ -59,6 +69,18 @@ class Collector:
         self.proxy_download = 0
         self.accounting = InterfaceAccounting(self.db)
         compact_schema(self.db)
+        self.writer = HourlyWriter(self.db)
+        # Exact hourly deduplication must retain completed flow identities, but
+        # Python tuples/sets cost far more than the compact traffic records.
+        # Spill the temporary B-tree with a small page cache instead. On OpenWrt
+        # the backing file is still tmpfs: this is not a whole-plugin RAM cap.
+        self.db.execute('PRAGMA temp_store=FILE')
+        self.db.execute('PRAGMA temp.auto_vacuum=INCREMENTAL')
+        self.db.execute('''CREATE TEMP TABLE seen_flows (
+            bucket INTEGER NOT NULL, interface TEXT NOT NULL,
+            kind INTEGER NOT NULL, identity TEXT NOT NULL,
+            PRIMARY KEY(bucket,interface,kind,identity)) WITHOUT ROWID''')
+        self.db.execute('PRAGMA temp.cache_size=-256')
         self.storage = StoragePolicy(self.db, DB_PATH)
         self.excluded = set()
         # Global arrival order handles bounded retention; per-flow indexes let
@@ -77,7 +99,9 @@ class Collector:
         self.export_error = ''
         self.export_stamp = None
         self.export_checked = set()
-        self.seen = {}
+        self.seen = set()
+        self.seen_needs_vacuum = False
+        self.seen_generation = 0
         self.seen_latest = 0
         self.running = True
         self.events = 0
@@ -113,13 +137,27 @@ class Collector:
             return digest, None
         application = flow.get("detected_application_name") or "Unknown"
         protocol = flow.get("detected_protocol_name") or "Unknown"
-        host = flow.get("host_server_name") or flow.get("dns_host_name") or (redirect['remote'] if redirect else flow.get("other_ip")) or "Unknown"
+        protocol_key = protocol.strip().casefold()
+        if protocol_key in ('', 'unknown', 'unclassified'):
+            protocol = TRANSPORT_NAMES.get(flow.get('ip_protocol'), 'Unknown')
+            protocol_rank = int(protocol != 'Unknown')
+        else:
+            protocol_rank = 1 if protocol_key in ('tcp', 'udp') else 2
+        host = flow.get('host_server_name') or flow.get('dns_host_name')
+        rank = host_rank(host) if host else 0
+        dns_host = flow.get('dns_host_name')
+        if not rank and dns_host and dns_host != host and host_rank(dns_host):
+            host, rank = dns_host, 1
+        if not host:
+            host = (redirect['remote'] if redirect else flow.get('other_ip')) or 'Unknown'
         return digest, {
             "mac": mac,
             "ip": ip,
             "application": application,
             "protocol": protocol,
             "host": host.lower(),
+            "_host_rank": rank,
+            "_protocol_rank": protocol_rank,
             "redirect": redirect,
             # An original TCP leg can precede its conntrack REDIRECT entry.
             # Retain only its tuple so counters can re-check attribution when
@@ -145,7 +183,7 @@ class Collector:
                 # metadata so a newer conntrack snapshot can resolve it even
                 # before Netify writes another export.
                 self.excluded.discard(digest)
-                first_seen = self.waiting_metadata.get(digest, (int(time.time()),))[0]
+                first_seen = self.waiting_metadata.get(digest, (time.monotonic(),))[0]
                 kept_flow = {key: flow[key] for key in (
                     'digest', 'ip_protocol', 'local_ip', 'local_port', 'local_mac',
                     'other_ip', 'other_port', 'other_mac', 'other_type',
@@ -163,8 +201,13 @@ class Collector:
         self.waiting_metadata.pop(digest, None)
         self.excluded.discard(digest)
         old = self.flows.get(digest, {})
+        if old:
+            for field in ('host', 'protocol'):
+                rank_key = '_' + field + '_rank'
+                if metadata[rank_key] < old.get(rank_key, 0):
+                    metadata[field], metadata[rank_key] = old[field], old[rank_key]
         for key, value in metadata.items():
-            if value and value != "Unknown":
+            if value and not (key == 'application' and value.strip().casefold() in ('unknown', 'unclassified')) and value != 'Unknown':
                 old[key] = value
             elif key not in old:
                 old[key] = value
@@ -177,8 +220,8 @@ class Collector:
             key = (digest[0], identity)
             candidate = self.original_candidates.get(key)
             if candidate is None or candidate['digest'] != digest:
-                candidate = {'digest': digest, 'entries': {}, 'last': int(time.time())}
-            candidate['last'] = int(time.time())
+                candidate = {'digest': digest, 'entries': {}, 'last': time.monotonic()}
+            candidate['last'] = time.monotonic()
             self.original_candidates[key] = candidate
             self.original_candidates.move_to_end(key)
             self.expire_original_candidates()
@@ -187,7 +230,7 @@ class Collector:
         self.replay_pending(digest)
 
     def expire_original_candidates(self):
-        cutoff = int(time.time()) - PENDING_TTL
+        cutoff = time.monotonic() - PENDING_TTL
         while self.original_candidates:
             key, candidate = next(iter(self.original_candidates.items()))
             if len(self.original_candidates) <= PENDING_LIMIT and candidate['last'] >= cutoff:
@@ -195,6 +238,7 @@ class Collector:
             self.original_candidates.popitem(last=False)
 
     def reconcile_original(self, interface, connection):
+        self.sync_retention()
         self.expire_original_candidates()
         candidate = self.original_candidates.pop((interface, connection), None)
         if candidate is None:
@@ -205,15 +249,52 @@ class Collector:
             original['redirect'] = {'role': 'original', 'local_client': True,
                                     'connection': connection}
             original['proxy_probe'] = None
+        self.upload -= candidate.get('pruned_upload', 0)
         for row, (upload, flow_inc) in candidate['entries'].items():
             bucket = row[0]
-            seen = self.seen.setdefault(bucket, set())
-            connection_key = (interface, connection)
-            duplicate_flow = flow_inc if connection_key in seen else 0
-            seen.add(connection_key)
-            if upload or duplicate_flow:
-                record_hourly(self.db, (*row, -upload, 0, -duplicate_flow))
-                self.upload -= upload
+            duplicate_flow = flow_inc if self.has_seen(bucket, interface, connection) else 0
+            # Capacity cleanup may have removed this row since the original
+            # event arrived. Never create a negative row to compensate it.
+            retained = correct_hourly(self.db, row, upload=upload, flows=duplicate_flow)
+            if retained:
+                self.mark_seen(bucket, interface, connection)
+            # Session counters include already-pruned history, so their
+            # original duplicate upload still needs correcting either way.
+            self.upload -= upload
+
+    def sync_retention(self):
+        buckets = self.storage.take_pruned_buckets()
+        if not buckets:
+            return
+        self.writer.clear_cache()
+        for bucket in buckets:
+            self.db.execute('DELETE FROM temp.seen_flows WHERE bucket=?', (bucket,))
+        self.seen.difference_update(buckets)
+        self.seen_needs_vacuum = True
+        # Invalidate the tiny per-active-flow cache lazily; no scan of all
+        # live metadata is needed. Unaffected buckets still deduplicate in SQL.
+        self.seen_generation += 1
+        for candidate in self.original_candidates.values():
+            for row in tuple(candidate['entries']):
+                if row[0] in buckets:
+                    upload, _ = candidate['entries'].pop(row)
+                    candidate['pruned_upload'] = candidate.get('pruned_upload', 0) + upload
+
+    @staticmethod
+    def seen_identity(identity):
+        # Keep native digests separate from proxy tuples without hashing or
+        # truncating: deduplication must not introduce collisions.
+        return (1, json.dumps(identity, separators=(',', ':'))) if isinstance(identity, tuple) else (0, identity)
+
+    def has_seen(self, bucket, interface, identity):
+        return self.db.execute('''SELECT 1 FROM temp.seen_flows
+            WHERE bucket=? AND interface=? AND kind=? AND identity=?''',
+            (bucket, interface, *self.seen_identity(identity))).fetchone() is not None
+
+    def mark_seen(self, bucket, interface, identity):
+        self.seen.add(bucket)
+        return self.db.execute('INSERT OR IGNORE INTO temp.seen_flows VALUES (?,?,?,?)',
+            (bucket, interface, *self.seen_identity(identity))).rowcount == 1
 
     def pop_pending(self, sequence):
         item = self.pending_stats.pop(sequence)
@@ -227,7 +308,7 @@ class Collector:
     def replay_pending(self, digest):
         # Copy just this flow's index because replay can consume a final purge.
         for sequence in tuple(self.pending_by_digest.get(digest, ())):
-            received, pending = self.pop_pending(sequence)
+            received, pending, _ = self.pop_pending(sequence)
             self.add_stats(pending, received, retry=True)
 
     def queue_pending(self, message, now, upload, download):
@@ -242,10 +323,16 @@ class Collector:
         pending = {'type': message.get('type'), 'interface': key[0],
                    'internal': True, 'flow': {'digest': key[1],
                    'local_bytes': upload, 'other_bytes': download}}
-        self.pending_stats[sequence] = (now, pending)
+        # Keep wall-clock arrival time for hour assignment; use elapsed time
+        # for expiry so NTP adjustments cannot prematurely discard or extend
+        # the recovery window. Explicit old arrivals retain their existing age.
+        age = max(0, time.time() - now)
+        expires = time.monotonic() + PENDING_TTL - age
+        self.pending_stats[sequence] = (now, pending, expires)
         self.pending_by_digest.setdefault(key, {})[sequence] = None
 
     def add_stats(self, message, received_at=None, retry=False):
+        self.sync_retention()
         flow = message.get("flow") or {}
         if message.get('internal') is False:
             return
@@ -254,6 +341,11 @@ class Collector:
         upload = max(0, int(flow.get("local_bytes") or 0))
         download = max(0, int(flow.get("other_bytes") or 0))
         now = int(time.time()) if received_at is None else received_at
+        # Only newly received socket deltas define the live clock, including
+        # those waiting for metadata. A replay retains its arrival hour but
+        # must never advance this watermark after an intervening NTP rollback.
+        if not retry:
+            self.seen_latest = now
         if digest in self.excluded:
             if message.get('type') == 'flow_purge':
                 self.excluded.discard(digest)
@@ -301,29 +393,34 @@ class Collector:
         # Recovery can interleave the previous hour with current events. Keep
         # both sets during the bounded replay window instead of clearing the
         # current set every time an older event arrives.
-        self.seen_latest = max(self.seen_latest, now)
         oldest = (self.seen_latest - PENDING_TTL) // 3600 * 3600
         for old_bucket in tuple(self.seen):
             if old_bucket < oldest:
-                del self.seen[old_bucket]
-        seen = self.seen.setdefault(bucket, set())
-        seen_key = (message.get('interface', ''), redirect['connection']) if redirect else digest
-        flow_inc = 0 if seen_key in seen else 1
-        seen.add(seen_key)
+                self.db.execute('DELETE FROM temp.seen_flows WHERE bucket=?', (old_bucket,))
+                self.seen.remove(old_bucket)
+                self.seen_needs_vacuum = True
+        seen_key = redirect['connection'] if redirect else digest[1]
+        # An active flow usually produces many deltas in the same hour. Cache
+        # only its last successful key on metadata that is removed at purge;
+        # completed identities remain exact in the compact temporary table.
+        already_counted = (bucket in self.seen and meta.get('_counted_bucket') == bucket
+                           and meta.get('_counted_key') == seen_key
+                           and meta.get('_counted_generation') == self.seen_generation)
+        flow_inc = 0 if already_counted else int(self.mark_seen(bucket, digest[0], seen_key))
         if not redirect and meta.get('proxy_probe'):
             probe = meta['proxy_probe']
             identity = (probe['ip_protocol'], probe['local_ip'], probe['local_port'],
                         probe['other_ip'], probe['other_port'])
             candidate = self.original_candidates.get((digest[0], identity))
             if candidate and candidate['digest'] == digest:
-                candidate['last'] = now
+                candidate['last'] = time.monotonic()
                 self.original_candidates.move_to_end((digest[0], identity))
                 row = (bucket, meta['mac'], meta['ip'], meta['application'],
                        meta['protocol'], meta['host'])
                 previous_upload, previous_flow = candidate['entries'].get(row, (0, 0))
                 candidate['entries'][row] = (previous_upload + upload,
                                              previous_flow + flow_inc)
-        record_hourly(self.db,
+        self.writer.write(
             (
                 bucket,
                 meta["mac"],
@@ -336,6 +433,8 @@ class Collector:
                 flow_inc,
             ),
         )
+        meta['_counted_bucket'], meta['_counted_key'] = bucket, seen_key
+        meta['_counted_generation'] = self.seen_generation
         self.events += 1
         self.upload += upload
         self.download += download
@@ -350,14 +449,14 @@ class Collector:
 
     def recover_metadata(self):
         # Read metadata only: export counters overlap socket deltas and MUST NOT be added.
-        now = int(time.time())
+        now_mono = time.monotonic()
         # Expire before recovery so an old export cannot resurrect deltas after
         # their replay window. Scan once per maintenance tick, not per flow.
-        for sequence, (received, _) in tuple(self.pending_stats.items()):
-            if now - received >= PENDING_TTL:
+        for sequence, (_, _, expires) in tuple(self.pending_stats.items()):
+            if now_mono >= expires:
                 self.discard_pending(self.pop_pending(sequence))
         for key, (received, message) in tuple(self.waiting_metadata.items()):
-            if now - received >= PENDING_TTL:
+            if now_mono - received >= PENDING_TTL:
                 self.waiting_metadata.pop(key, None)
             elif key in self.pending_by_digest:
                 self.update_metadata(message)
@@ -407,6 +506,8 @@ class Collector:
             "upload": self.upload,
             "download": self.download,
             "active_metadata": len(self.flows),
+            "dedup_entries": self.db.execute('SELECT COUNT(*) FROM temp.seen_flows').fetchone()[0],
+            "dedup_bytes": self.db.execute('PRAGMA temp.page_count').fetchone()[0] * self.db.execute('PRAGMA temp.page_size').fetchone()[0],
             "last_event": self.last_event,
             "last_error": self.last_error,
             "database": DB_PATH,
@@ -419,10 +520,20 @@ class Collector:
     def maintenance(self):
         now_mono = time.monotonic()
         if now_mono - self.last_commit >= 3:
+            self.expire_original_candidates()
             self.recover_metadata()
             self.accounting.sample(int(time.time()))
             self.db.commit()
-            self.storage.maintain()
+            try:
+                self.storage.maintain()
+            finally:
+                # Dictionary IDs may be removed and reused by bounded GC,
+                # even on a tick that removes no additional hourly rows.
+                self.writer.clear_cache()
+            self.sync_retention()
+            if self.seen_needs_vacuum:
+                self.db.execute('PRAGMA temp.incremental_vacuum(64)').fetchall()
+                self.seen_needs_vacuum = self.db.execute('PRAGMA temp.freelist_count').fetchone()[0] > 0
             self.write_status()
             self.last_commit = now_mono
 

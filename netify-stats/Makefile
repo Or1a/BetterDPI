@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-netify-stats
-PKG_VERSION:=0.2.8
+PKG_VERSION:=0.3.0
 PKG_RELEASE:=1
 PKG_LICENSE:=GPL-3.0-only
 PKG_LICENSE_FILES:=LICENSE
@@ -15,7 +15,7 @@ define Package/luci-app-netify-stats
   CATEGORY:=LuCI
   SUBMENU:=3. Applications
   TITLE:=Local Netify traffic statistics
-  DEPENDS:=+netifyd +python3 +python3-sqlite3 +luci-base +rpcd
+  DEPENDS:=+netifyd +python3 +python3-sqlite3 +python3-urllib +python3-openssl +ca-bundle +luci-base +rpcd
   PKGARCH:=all
 endef
 
@@ -46,7 +46,7 @@ define Package/luci-app-netify-stats/install
 	$(INSTALL_BIN) ./netify_rpc.py $(1)/usr/libexec/rpcd/netify-stats
 	$(INSTALL_BIN) ./packaging/post-install $(1)/usr/lib/netify-stats/package-post-install
 	$(INSTALL_BIN) ./packaging/pre-deinstall $(1)/usr/lib/netify-stats/package-pre-deinstall
-	$(INSTALL_DATA) ./netify_accounting.py ./netify_classify.py ./netify_control.py ./netify_storage.py ./netify_proxy.py ./netify_query.py $(1)/usr/lib/netify-stats/
+	$(INSTALL_DATA) ./netify_accounting.py ./netify_classify.py ./netify_control.py ./netify_storage.py ./netify_proxy.py ./netify_query.py ./netify_update.py $(1)/usr/lib/netify-stats/
 	$(INSTALL_DATA) ./rules/community-rules.json ./rules/COMMUNITY-LICENSE ./rules/NEXTDNS-LICENSE $(1)/usr/share/netify-stats/
 	$(INSTALL_DATA) ./LICENSE $(1)/usr/share/licenses/luci-app-netify-stats/LICENSE
 	$(INSTALL_DATA) ./acl.json $(1)/usr/share/rpcd/acl.d/luci-app-netify-stats.json

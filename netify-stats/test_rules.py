@@ -66,6 +66,15 @@ class RulesTest(unittest.TestCase):
         self.assertEqual(classifier.describe_metadata(app), {
             'name_i18n': '', 'source_type': 'community',
             'source_names': ['DLC', 'NextDNS services'],
+            'classification_evidence': [
+                {'reason': 'community', 'matched_domain': 'pinterest.biz', 'rule_type': 'suffix',
+                 'source_id': 'nextdns-services', 'source_name': 'NextDNS services'},
+                {'reason': 'community', 'matched_domain': 'pinterest.com', 'rule_type': 'suffix',
+                 'source_id': 'dlc', 'source_name': 'DLC'},
+            ],
+            'classification_evidence_truncated': False,
+            'identification_level': 'application', 'application_identified': True,
+            'detection_reason': 'community_rule',
         })
         self.assertEqual(classifier.classify('Unknown', 'bereal.com.evil.example'),
                          'domain:bereal.com.evil.example')
@@ -90,12 +99,23 @@ class RulesTest(unittest.TestCase):
         self.assertEqual(classifier.classify('Unknown', 'v95-aw-cold.douyinvod.com'), 'community:douyin')
         self.assertEqual(classifier.describe_metadata('Unknown'), {
             'name_i18n': 'Unknown destination', 'source_type': 'unknown', 'source_names': [],
+            'classification_evidence': [], 'classification_evidence_truncated': False,
+            'identification_level': 'unknown', 'application_identified': False,
+            'detection_reason': 'insufficient_metadata',
         })
         self.assertEqual(classifier.describe_metadata('domain:example.com'), {
             'name_i18n': '', 'source_type': 'domain', 'source_names': [],
+            'classification_evidence': [{'reason': 'unmatched_domain'}],
+            'classification_evidence_truncated': False,
+            'identification_level': 'domain', 'application_identified': False,
+            'detection_reason': 'unmatched_domain',
         })
         self.assertEqual(classifier.describe_metadata('netify.native'), {
             'name_i18n': '', 'source_type': 'native', 'source_names': [],
+            'classification_evidence': [{'reason': 'native'}],
+            'classification_evidence_truncated': False,
+            'identification_level': 'application', 'application_identified': True,
+            'detection_reason': 'native_app',
         })
 
     def test_malformed_provenance_falls_back_without_interrupting_summary(self):
@@ -107,6 +127,95 @@ class RulesTest(unittest.TestCase):
             classifier = Classifier(path)
             self.assertTrue(classifier.error)
             self.assertEqual(classifier.classify('Unknown', 'bereal.com'), 'domain:bereal.com')
+            self.assertEqual(classifier.describe_metadata('domain:bereal.com')['classification_evidence'],
+                             [{'reason': 'rules_unavailable'}])
+
+    def test_evidence_explains_exact_suffix_and_ambiguous_matches(self):
+        classifier = Classifier(RULES)
+        classifier.rules['exact']['specific.service.example'] = ['specific']
+        classifier.rules['exact']['shared.service.example'] = ['one', 'two']
+        classifier.rules['suffix']['service.example'] = ['parent']
+        for host, expected, rule_type, matched in (
+                ('SPECIFIC.SERVICE.EXAMPLE.', 'community:specific', 'exact', 'specific.service.example'),
+                ('api.service.example', 'community:parent', 'suffix', 'service.example'),
+                ('shared.service.example', 'domain:shared.service.example', 'exact', 'shared.service.example')):
+            self.assertEqual(classifier.classify('Unknown', host), expected)
+            evidence = classifier.describe_metadata(expected)['classification_evidence'][0]
+            self.assertEqual((evidence['rule_type'], evidence['matched_domain']), (rule_type, matched))
+            self.assertEqual((evidence['source_id'], evidence['source_name']), ('dlc', 'DLC'))
+            if expected.startswith('domain:'):
+                self.assertEqual(evidence['reason'], 'ambiguous')
+                self.assertEqual(evidence['candidates'], ['one', 'two'])
+                self.assertEqual(evidence['candidate_count'], 2)
+            else:
+                self.assertEqual(evidence['reason'], 'community')
+        before = classifier._classify_domain.cache_info()
+        self.assertEqual(classifier.classify('netify.native', 'shared.service.example'), 'netify.native')
+        self.assertEqual(classifier.describe_metadata('netify.native')['classification_evidence'],
+                         [{'reason': 'native'}])
+        self.assertEqual(classifier._classify_domain.cache_info(), before)
+
+    def test_community_evidence_is_deduplicated_and_bounded(self):
+        classifier = Classifier(RULES)
+        for index in range(8):
+            classifier.rules['suffix'][f'service{index}.example'] = ['service']
+        for index in range(8):
+            for child in range(20):
+                self.assertEqual(classifier.classify('Unknown', f'api{child}.service{index}.example'),
+                                 'community:service')
+        metadata = classifier.describe_metadata('community:service')
+        self.assertEqual(len(metadata['classification_evidence']), 5)
+        self.assertTrue(metadata['classification_evidence_truncated'])
+        self.assertEqual(len({item['matched_domain'] for item in metadata['classification_evidence']}), 5)
+        self.assertEqual(len(classifier.app_evidence['community:service']), 5)
+        # Cache hits should not create duplicate observations or retain an
+        # unbounded per-host evidence map alongside the domain lookup cache.
+        for _ in range(10):
+            classifier.classify('Unknown', 'api0.service0.example')
+        self.assertEqual(classifier.describe_metadata('community:service'), metadata)
+        metadata['classification_evidence'][0]['matched_domain'] = 'changed.example'
+        self.assertNotIn('changed.example', [item['matched_domain'] for item in
+                         classifier.describe_metadata('community:service')['classification_evidence']])
+
+    def test_unknown_reasons_do_not_retain_raw_addresses_or_invalid_hosts(self):
+        classifier = Classifier(RULES)
+        for host in ('', 'Unknown', '192.0.2.1', '2001:db8::1', '::ffff:192.0.2.1',
+                     'bad:address', '2001:db8::1\x00', 'not a.hostname', 'a' * 254):
+            self.assertEqual(classifier.classify('Unknown', host), 'Unknown')
+        self.assertEqual(classifier.describe_metadata('Unknown')['classification_evidence'], [
+            {'reason': 'invalid_host'}, {'reason': 'ip_literal'}, {'reason': 'missing_host'}])
+        for index in range(1000):
+            host = f'unmatched{index}.example'
+            self.assertEqual(classifier.classify('Unknown', host), 'domain:' + host)
+        self.assertEqual(set(classifier.app_evidence), {'Unknown'})
+        self.assertEqual(classifier.describe_metadata('domain:unmatched999.example')['classification_evidence'],
+                         [{'reason': 'unmatched_domain'}])
+
+    def test_evidence_samples_do_not_depend_on_sql_scan_order(self):
+        outputs = []
+        for order in (range(8), reversed(range(8)), (3, 7, 1, 6, 0, 5, 2, 4)):
+            classifier = Classifier(RULES)
+            for index in range(8):
+                classifier.rules['suffix'][f'service{index}.example'] = ['service']
+            for index in order:
+                classifier.classify('Unknown', f'api.service{index}.example')
+            outputs.append(classifier.describe_metadata('community:service'))
+        self.assertEqual(outputs[0], outputs[1])
+        self.assertEqual(outputs[0], outputs[2])
+        self.assertTrue(outputs[0]['classification_evidence_truncated'])
+
+    def test_ambiguous_candidate_payload_is_bounded_and_independent(self):
+        classifier = Classifier(RULES)
+        candidates = [f'app{index}' for index in range(8)]
+        classifier.rules['suffix']['shared.example'] = candidates
+        app = classifier.classify('Unknown', 'api.shared.example')
+        self.assertEqual(app, 'domain:api.shared.example')
+        evidence = classifier.describe_metadata(app)['classification_evidence'][0]
+        self.assertEqual(evidence['candidate_count'], 8)
+        self.assertEqual(evidence['candidates'], candidates[:5])
+        evidence['candidates'].append('changed')
+        self.assertEqual(classifier.describe_metadata(app)['classification_evidence'][0]['candidates'],
+                         candidates[:5])
 
 
 if __name__ == '__main__':

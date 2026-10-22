@@ -9,12 +9,14 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from netify_storage import read_enabled, update_settings
+from netify_storage import read_enabled, update_settings, settings_snapshot
+from netify_update import installation_active
 
 DB_PATH = '/tmp/netify-stats/stats.db'
 STATE_PATH = '/var/run/netify-stats-control.json'
 LOCK_PATH = '/var/run/netify-stats-control.lock'
 PROC_PATH = '/proc'
+_UNSET = object()
 
 
 def normalize_legacy_error(error):
@@ -67,16 +69,27 @@ def collector_running():
     return runtime_state()[0]
 
 
-def control_status():
-    enabled = read_enabled()
+def control_status(enabled=_UNSET):
+    # Read-only status must stay available even when the desired configuration
+    # is corrupt. Callers with a validated snapshot can avoid a second read.
+    config_error = ''
+    if enabled is _UNSET:
+        try:
+            enabled = read_enabled()
+        except (OSError, ValueError, TypeError, AttributeError) as exc:
+            enabled = None
+            config_error = str(exc)
+    if enabled is not None and not isinstance(enabled, bool):
+        raise ValueError('enabled must be boolean or unknown')
     collector, netify = runtime_state()
     try:
         error = normalize_legacy_error(json.loads(Path(STATE_PATH).read_text()).get('apply_error', ''))
     except (OSError, ValueError, AttributeError):
         error = ''
     return {'enabled': enabled, 'collector_running': collector, 'netify_running': netify,
-            'actual_state': 'running' if collector and netify else 'stopped' if not collector and not netify else 'partial',
-            'applied': collector == enabled and netify == enabled, 'apply_error': error}
+            'actual_state': 'unknown' if enabled is None else 'running' if collector and netify else 'stopped' if not collector and not netify else 'partial',
+            'applied': enabled is not None and collector == enabled and netify == enabled,
+            'apply_error': error, 'config_error': config_error}
 
 
 def record_error(error):
@@ -109,13 +122,26 @@ def set_enabled(enabled):
     deadline = time.monotonic() + 15
     def command(*args):
         run(*args, timeout=min(10, remaining(deadline)))
+    def validate_start(values):
+        snapshot = settings_snapshot(values)
+        if snapshot['config_error']:
+            raise ValueError('Cannot start analysis: ' + snapshot['config_error'])
     with open(LOCK_PATH,'a') as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise RuntimeError('Another analysis toggle is in progress. Please try again.') from exc
+        # A package manager can outlive its update worker. Its recorded process
+        # identity keeps service toggles from racing the package lifecycle hooks.
+        if installation_active():
+            raise RuntimeError('An application update is being installed. Wait for it to finish before changing analysis.')
         try:
-            update_settings({'enabled':enabled}, deadline=deadline)
+            # Validate the merged target while holding the settings lock. An
+            # explicit toggle can repair a bad enabled flag, but must not start
+            # services with invalid interface/storage settings. Stopping stays
+            # available when those unrelated fields are invalid.
+            update_settings({'enabled':enabled}, deadline=deadline,
+                            validate=validate_start if enabled else None)
             if not enabled:
                 command('/etc/init.d/netify-stats','stop')
                 wait_for_state(False, deadline, collector_only=True)
@@ -141,8 +167,8 @@ def set_enabled(enabled):
             remaining(deadline)
             record_error('')
         except Exception as exc:
-            # Desired state stays visible; retry reconciles partially completed
-            # service changes rather than pretending rollback succeeded.
+            # After validation, desired state stays visible; retry reconciles
+            # partial service changes rather than pretending rollback succeeded.
             error = 'Analysis setting could not be fully applied: '+str(exc)
             try:
                 record_error(error)

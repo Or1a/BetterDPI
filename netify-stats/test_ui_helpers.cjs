@@ -74,13 +74,13 @@ function E(tag, attrs = {}, children = []) {
 }
 
 const dom = {content(node, value) { node.children = list(value); }};
-function setup(data, handlers = {}, {locale = 'zh-Hans', DateClass = Date, confirm = () => true} = {}) {
+function setup(data, handlers = {}, {locale = 'zh-Hans', DateClass = Date, confirm = () => true, reload = () => {}, setTimer = setTimeout, cancelTimer = clearTimeout} = {}) {
  const source = fs.readFileSync(path.join(__dirname, 'netify-stats.js'), 'utf8');
- const view = new Function('view', 'rpc', 'dom', 'poll', 'L', 'E', 'document', 'window', '_', 'Date', source)(
+ const view = new Function('view', 'rpc', 'dom', 'poll', 'L', 'E', 'document', 'window', '_', 'Date', 'setTimeout', 'clearTimeout', source)(
   {extend: x => x}, {declare: spec => (...args) => Promise.resolve().then(() => handlers[spec.method] ? handlers[spec.method](...args) : data)},
   dom, {add() {}}, {bind: (fn, self) => fn.bind(self), env: {lang: locale}}, E,
   {documentElement: {lang: locale}, createElementNS: (ns, tag) => E(tag), createTextNode: value => value},
-  {confirm}, translator(locale), DateClass);
+  {confirm, location: {reload}}, translator(locale), DateClass, setTimer, cancelTimer);
  return {view, root: view.render(data)};
 }
 

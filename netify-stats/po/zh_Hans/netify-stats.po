@@ -348,3 +348,437 @@ msgstr "%s（%s）"
 #, c-format
 msgid "Analysis setting could not be fully applied: %s"
 msgstr "开关尚未完整应用，请重试：%s"
+
+msgid "Netify identified this application directly."
+msgstr "Netify 直接识别了此应用。"
+
+msgid "A community domain rule supplied this classification."
+msgstr "此分类来自社区域名规则。"
+
+msgid "The matching rule names multiple applications; no application was selected."
+msgstr "命中的规则对应多个应用，未强行选择应用归属。"
+
+msgid "The domain is known, but no application rule matched."
+msgstr "已识别域名，但没有匹配的应用规则。"
+
+msgid "Only an IP address is available."
+msgstr "仅有 IP 地址，缺少域名信息。"
+
+msgid "No hostname is available."
+msgstr "没有可用的主机名。"
+
+msgid "The supplied hostname is not a valid domain."
+msgstr "提供的主机名不是有效域名。"
+
+msgid "Community rules are unavailable."
+msgstr "社区规则当前不可用。"
+
+msgid "Classification details"
+msgstr "识别依据"
+
+msgid "Classification details are unavailable."
+msgstr "暂无识别依据。"
+
+msgid "Exact domain rule"
+msgstr "精确域名规则"
+
+msgid "Domain suffix rule"
+msgstr "域名后缀规则"
+
+#, c-format
+msgid "%s: %s"
+msgstr "%s：%s"
+
+#, c-format
+msgid "Rule source: %s"
+msgstr "规则来源：%s"
+
+#, c-format
+msgid "Candidate applications: %s"
+msgstr "候选应用：%s"
+
+#, c-format
+msgid "Only the first %d candidates are shown."
+msgstr "仅显示前 %d 个候选应用。"
+
+msgid "Showing a sample of matching rules."
+msgstr "这里只展示部分匹配规则。"
+
+msgid "Repair the settings before changing analysis state."
+msgstr "请先修复配置，再更改流量分析状态。"
+
+msgid "View interface history"
+msgstr "查看接口历史"
+
+msgid "All recorded interfaces"
+msgstr "所有有记录的接口"
+
+msgid "The capture interface setting is invalid."
+msgstr "采集接口配置无效。"
+
+msgid "No interface records in this time range"
+msgstr "此时间范围内没有接口记录"
+
+#, c-format
+msgid "Settings are invalid. Historical data is still available. %s"
+msgstr "配置无效，仍可查看历史数据。%s"
+
+msgid "Some records are ahead of the system clock. All history includes them; recent time ranges exclude future hours."
+msgstr "部分记录时间晚于系统时间。“全部”包含这些记录，最近时段查询会排除未来小时。"
+
+msgid "A connection active in multiple hours is counted once per hour."
+msgstr "同一连接跨多个小时活跃时，每小时各计一次。"
+
+msgid "Hourly active connections"
+msgstr "逐小时活跃连接数"
+
+msgid "TLS / encrypted traffic"
+msgstr "TLS 加密流量"
+
+msgid "QUIC"
+msgstr "QUIC"
+
+msgid "DNS"
+msgstr "DNS"
+
+msgid "HTTP / web"
+msgstr "HTTP 网页流量"
+
+msgid "STUN / NAT traversal"
+msgstr "STUN / NAT 穿透"
+
+msgid "BitTorrent / P2P"
+msgstr "BitTorrent / P2P"
+
+msgid "SSH / remote access"
+msgstr "SSH 远程访问"
+
+msgid "VPN protocol"
+msgstr "VPN 协议"
+
+msgid "TCP"
+msgstr "TCP"
+
+msgid "UDP"
+msgstr "UDP"
+
+#, c-format
+msgid "%s (application unidentified)"
+msgstr "%s（应用未识别）"
+
+msgid "Protocol only"
+msgstr "仅识别协议"
+
+msgid "Only the protocol is identified; the application remains unknown."
+msgstr "仅识别出协议，尚未识别具体应用。"
+
+#, c-format
+msgid "Observed protocol: %s"
+msgstr "观测到的协议：%s"
+
+msgid "Application identified"
+msgstr "已识别应用"
+
+msgid "Traffic identification"
+msgstr "流量识别情况"
+
+msgid "Download + upload for the selected time range and devices."
+msgstr "当前时间和设备筛选范围内的下载与上传流量。"
+
+#, c-format
+msgid "%s · %s%% of traffic"
+msgstr "%s · 占流量 %s%%"
+
+msgid "The identification breakdown is unavailable."
+msgstr "暂无流量识别分布数据。"
+
+msgid "%s (infrastructure; application unidentified)"
+msgstr "%s（基础设施；应用未识别）"
+
+msgid "Shared infrastructure"
+msgstr "共享基础设施"
+
+msgid "The domain identifies a shared hosting or CDN provider, not a specific application."
+msgstr "该域名属于共享托管或 CDN 服务商，无法据此确定具体应用。"
+
+msgid "Domain or infrastructure only"
+msgstr "仅域名或基础设施"
+
+msgid "Collection status unavailable"
+msgstr "无法确认采集状态"
+
+msgid "The analysis setting has not been fully applied."
+msgstr "流量分析设置尚未完整应用。"
+
+msgid "Use Retry applying above, then check the service error if the problem continues."
+msgstr "请点击上方的“重试应用”；如果问题持续，请查看服务错误。"
+
+msgid "Collection paused"
+msgstr "采集已暂停"
+
+msgid "Collection stopped unexpectedly"
+msgstr "采集意外停止"
+
+msgid "Analysis is enabled, but its services are stopped."
+msgstr "流量分析已启用，但相关服务已停止。"
+
+msgid "Retry applying the analysis setting and check the Netify service."
+msgstr "请重试应用流量分析设置，并检查 Netify 服务。"
+
+msgid "Collector status is stale or unavailable"
+msgstr "采集状态已过期或不可用"
+
+msgid "The collector has not provided a current status."
+msgstr "采集器尚未提供有效的最新状态。"
+
+msgid "Check that the statistics collector is running and can write its status file."
+msgstr "请检查统计采集器是否运行，以及能否写入状态文件。"
+
+msgid "Waiting for Netify connection"
+msgstr "等待连接 Netify"
+
+msgid "Check that Netify is running and its local socket is enabled."
+msgstr "请检查 Netify 是否运行，以及是否已启用本地 socket。"
+
+msgid "Collector connected"
+msgstr "采集器已连接"
+
+msgid "The collector reported an error."
+msgstr "采集器报告了错误。"
+
+msgid "Check the collector service log for this error."
+msgstr "请在采集器服务日志中查看该错误。"
+
+msgid "Check the proxy mode and conntrack availability."
+msgstr "请检查代理模式和连接跟踪（conntrack）是否可用。"
+
+msgid "Check Netify JSON export and whether the collector can read it."
+msgstr "请检查 Netify 的 JSON 导出，以及采集器是否有权限读取。"
+
+msgid "Check whether the selected statistics interface is available."
+msgstr "请检查选定的统计接口是否可用。"
+
+msgid "Some Netify messages could not be processed."
+msgstr "部分 Netify 消息未能处理。"
+
+msgid "Check Netify compatibility and the collector service log."
+msgstr "请检查 Netify 兼容性与采集器服务日志。"
+
+msgid "Collection diagnostics"
+msgstr "采集诊断"
+
+msgid "Attention needed"
+msgstr "需要检查"
+
+msgid "Collector status and counters apply to the whole current collection session, regardless of traffic filters."
+msgstr "以下状态和计数针对整个当前采集会话，不受流量筛选影响。"
+
+msgid "Last status update: %s"
+msgstr "最近状态更新：%s"
+
+msgid "Not available"
+msgstr "暂无"
+
+msgid "Last traffic event: %s"
+msgstr "最近流量事件：%s"
+
+msgid "No event received yet"
+msgstr "尚未收到事件"
+
+msgid "An idle network may produce no traffic events while the collector stays connected."
+msgstr "网络空闲时可能没有新流量事件，采集器仍可保持正常连接。"
+
+msgid "Active connection metadata"
+msgstr "活跃连接元数据"
+
+msgid "Events received without metadata"
+msgstr "收到时缺少元数据的事件"
+
+msgid "Events recovered"
+msgstr "已恢复事件"
+
+msgid "Events awaiting metadata"
+msgstr "等待元数据的事件"
+
+msgid "Invalid messages"
+msgstr "无效消息"
+
+msgid "Unidentified application traffic is already counted. Traffic that could not be attributed to a device is a separate statistics gap."
+msgstr "应用未识别的流量已计入统计；未能归属到设备的流量则属于另一类统计缺失。"
+
+msgid "No traffic matches these filters."
+msgstr "没有符合当前筛选的流量。"
+
+msgid "View devices and trend for this traffic"
+msgstr "查看此流量的设备与趋势"
+
+msgid "Focused traffic: %s"
+msgstr "当前聚焦流量：%s"
+
+msgid "Clear traffic focus"
+msgstr "清除流量聚焦"
+
+msgid "Find a device"
+msgstr "查找设备"
+
+msgid "Name, MAC or IP address"
+msgstr "名称、MAC 或 IP 地址"
+
+msgid "Identification level"
+msgstr "识别层级"
+
+msgid "All identification levels"
+msgstr "全部识别层级"
+
+msgid "Find application or domain"
+msgstr "搜索应用或域名"
+
+msgid "Collection is still running"
+msgstr "采集仍在运行"
+
+msgid "Download + upload for the selected time range, devices and traffic filters."
+msgstr "当前时间范围、设备及流量筛选下的下载与上传合计。"
+
+msgid "Results follow the selected filters. Matching an application name includes its traffic; matching only a domain includes only that domain's records."
+msgstr "结果按当前筛选显示。命中应用名称会纳入该应用的流量；仅命中域名时只计入对应域名记录。"
+
+msgid "Updating results… Previous results remain visible until the query completes."
+msgstr "正在更新结果…查询完成前保留显示上次结果。"
+
+msgid "Recorded traffic events"
+msgstr "已记录流量事件"
+
+msgid "Updates have not been checked."
+msgstr "尚未检查更新。"
+
+msgid "Checking GitHub Release…"
+msgstr "正在检查 GitHub Release…"
+
+msgid "A newer version is available."
+msgstr "有新版本可用。"
+
+msgid "No newer version is available."
+msgstr "目前没有更新的版本。"
+
+msgid "Updates are not supported on this system."
+msgstr "此系统暂不支持应用内更新。"
+
+msgid "Downloading and verifying the update…"
+msgstr "正在下载并校验更新…"
+
+msgid "Installing the update… Keep the router powered on."
+msgstr "正在安装更新…请保持路由器通电。"
+
+msgid "The package update completed. Reload this page to use the new interface."
+msgstr "安装包已更新。请重新加载页面以使用新版界面。"
+
+msgid "The update request failed."
+msgstr "更新请求失败。"
+
+msgid "The update stopped before its result could be confirmed. Check the installed package before trying again."
+msgstr "更新已中断，无法确认结果。请检查已安装的包后再重试。"
+
+msgid "Update service unavailable. Refresh the page or finish installing the current package."
+msgstr "更新服务不可用。请刷新页面，或完成当前安装包的安装。"
+
+msgid "No update package is available for this OpenWrt version."
+msgstr "没有适用于此 OpenWrt 版本的更新包。"
+
+msgid "The required package manager is unavailable."
+msgstr "所需的包管理器不可用。"
+
+msgid "Another update or settings operation is running. Refresh the status before trying again."
+msgstr "另一项更新或设置操作正在进行。请刷新状态后再重试。"
+
+msgid "Check for updates before installing."
+msgstr "请先检查更新，再进行安装。"
+
+msgid "The available update changed. Check again before installing."
+msgstr "可用更新已发生变化。请重新检查后再安装。"
+
+msgid "The update check expired. Check again before installing."
+msgstr "上次检查结果已过期。请重新检查后再安装。"
+
+msgid "The release information failed validation. No package was installed."
+msgstr "发布信息未通过校验，未安装任何包。"
+
+msgid "This release does not include update information. Try again after a compatible release is published."
+msgstr "此版本没有更新信息。请等待兼容版本发布后再试。"
+
+msgid "The download failed. Check the router's Internet connection and try again."
+msgstr "下载失败。请检查路由器的互联网连接后重试。"
+
+msgid "The download exceeds the permitted size. No package was installed."
+msgstr "下载文件超过大小限制，未安装任何包。"
+
+msgid "The download size does not match the release. No package was installed."
+msgstr "下载文件大小与发布信息不符，未安装任何包。"
+
+msgid "The download checksum does not match the release. No package was installed."
+msgstr "下载文件的校验和与发布信息不符，未安装任何包。"
+
+msgid "The installed package version could not be verified. Check the package manager before updating."
+msgstr "无法确认已安装的包版本。请检查包管理器后再更新。"
+
+msgid "The package manager could not finish the update. Check its reported error before trying again."
+msgstr "包管理器未能完成更新。请查看错误信息后再重试。"
+
+msgid "The installed package does not match the requested version. Check the package manager before trying again."
+msgstr "已安装的包与请求的版本不符。请检查包管理器后再重试。"
+
+msgid "The update task could not start. Refresh the status and try again."
+msgstr "无法启动更新任务。请刷新状态后重试。"
+
+msgid "The saved update status could not be read. Check the installed package before trying again."
+msgstr "无法读取保存的更新状态。请检查已安装的包后再重试。"
+
+msgid "Release version: %s"
+msgstr "发布版本：%s"
+
+msgid "View release notes"
+msgstr "查看版本说明"
+
+msgid "Last update check: %s"
+msgstr "上次检查更新：%s"
+
+msgid "Plugin updates"
+msgstr "应用更新"
+
+msgid "Installed version: %s"
+msgstr "已安装版本：%s"
+
+msgid "Sending update request…"
+msgstr "正在发送更新请求…"
+
+msgid "Checks run only when requested. Updates are downloaded from Or1a/BetterDPI on GitHub."
+msgstr "仅在手动操作时检查更新，更新包来自 GitHub 上的 Or1a/BetterDPI。"
+
+msgid "Updating briefly interrupts collection. Settings and retained statistics are kept; the router is not rebooted."
+msgstr "更新会短暂中断采集，保留设置和现有统计，不会重启路由器。"
+
+msgid "Check for updates"
+msgstr "检查更新"
+
+msgid "Install update"
+msgstr "安装更新"
+
+msgid "Refresh update status"
+msgstr "刷新更新状态"
+
+msgid "Reload this page? Unsaved settings and current filters will be lost."
+msgstr "重新加载页面？未保存的设置和当前筛选条件将丢失。"
+
+msgid "Reload page"
+msgstr "重新加载页面"
+
+msgid "Install BetterDPI %s? Collection will briefly stop. Settings and retained statistics will be kept, and the router will not reboot."
+msgstr "安装 BetterDPI %s？采集会短暂停止，设置和现有统计将保留，路由器不会重启。"
+
+msgid "The update service returned an invalid response."
+msgstr "更新服务返回了无效响应。"
+
+msgid "Could not contact the update service: %s"
+msgstr "无法连接更新服务：%s"
+
+msgid "An application update is being installed. Wait for it to finish before changing analysis."
+msgstr "应用更新正在安装，请等待完成后再操作分析开关。"

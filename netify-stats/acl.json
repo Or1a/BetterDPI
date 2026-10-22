@@ -6,6 +6,6 @@
         "netify-stats": [ "summary" ]
       }
     },
-    "write": { "ubus": { "netify-stats": [ "set_storage", "set_enabled", "set_interface" ] } }
+    "write": { "ubus": { "netify-stats": [ "set_storage", "set_enabled", "set_interface", "check_update", "install_update" ] } }
   }
 }

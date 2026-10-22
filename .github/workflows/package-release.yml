@@ -16,10 +16,12 @@ jobs:
       matrix:
         include:
           - openwrt: '24.10.8'
+            series: '24.10'
             sdk: openwrt-sdk-24.10.8-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst
             sha256: ac4a0405d2eea821b06f93c14ba13ffa90ad0457648903df7dde02570027ab21
             extension: ipk
           - openwrt: '25.12.5'
+            series: '25.12'
             sdk: openwrt-sdk-25.12.5-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst
             sha256: 0c8df0151a1e88feb7c03d694d61f6a18d51872815b7c811d76e2b77504d5e9c
             extension: apk
@@ -28,9 +30,17 @@ jobs:
       - name: Check source and regressions
         run: |
           python3 netify-stats/packaging/check_preparation.py
+          package_version=$(sed -n 's/^PKG_VERSION:=//p' netify-stats/Makefile)
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "V$package_version" ]; then
+            echo 'Release tag must match PKG_VERSION in netify-stats/Makefile.' >&2
+            exit 1
+          fi
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            python3 netify-stats/packaging/build_update_manifest.py --version "$package_version" --tag "$GITHUB_REF_NAME" --check-version
+          fi
           python3 -m unittest discover -s netify-stats -p 'test_*.py'
           python3 netify-stats/reproduce_late_original.py
-          for test in test_i18n_ui.cjs test_interface_ui.cjs test_logic.cjs test_settings_ui.cjs test_ui_helpers.cjs; do
+          for test in test_i18n_ui.cjs test_classification_ui.cjs test_diagnostics_ui.cjs test_filter_ui.cjs test_update_ui.cjs test_interface_ui.cjs test_logic.cjs test_settings_ui.cjs test_ui_helpers.cjs; do
             node "netify-stats/$test"
           done
       - name: Download verified OpenWrt SDK
@@ -62,8 +72,10 @@ jobs:
           make package/luci-app-netify-stats/compile NO_DEPS=1 V=s -j2
           package=$(find bin/packages -type f -name 'luci-app-netify-stats*.${{ matrix.extension }}' -print -quit)
           test -n "$package"
+          package_version=$(sed -n 's/^PKG_VERSION:=//p' "$GITHUB_WORKSPACE/netify-stats/Makefile")
           mkdir -p "$GITHUB_WORKSPACE/release"
-          cp "$package" "$GITHUB_WORKSPACE/release/BetterDPI-0.2.8-openwrt-${{ matrix.openwrt }}-all.${{ matrix.extension }}"
+          cp "$package" "$GITHUB_WORKSPACE/release/BetterDPI-$package_version-openwrt-${{ matrix.openwrt }}-all.${{ matrix.extension }}"
+          cp "$package" "$GITHUB_WORKSPACE/release/BetterDPI-openwrt-${{ matrix.series }}-all.${{ matrix.extension }}"
       - uses: actions/upload-artifact@v4
         with:
           name: openwrt-${{ matrix.openwrt }}
@@ -88,16 +100,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          package_version=$(sed -n 's/^PKG_VERSION:=//p' netify-stats/Makefile)
+          test "$GITHUB_REF_NAME" = "V$package_version"
+          python3 netify-stats/packaging/build_update_manifest.py --release-dir release --version "$package_version" --tag "$GITHUB_REF_NAME"
           cd release
-          sha256sum BetterDPI-* > SHA256SUMS
-          gh release create "${GITHUB_REF_NAME}" BetterDPI-* SHA256SUMS \
+          sha256sum BetterDPI-* update.json > SHA256SUMS
+          gh release create "${GITHUB_REF_NAME}" BetterDPI-* update.json SHA256SUMS \
             --title "${GITHUB_REF_NAME}" \
-            --notes 'OpenWrt 24.10.8: IPK; OpenWrt 25.12.5: APK. Pure-Python/LuCI package (architecture all). Requires a separately configured Netifyd local flow socket. Statistics remain in /tmp and are lost on reboot.'
+            --notes 'OpenWrt 24.10: IPK (built with 24.10.8 SDK); OpenWrt 25.12: APK (built with 25.12.5 SDK). Versioned files and fixed-name aliases contain identical packages; update.json describes manual in-app updates. SHA256SUMS covers packages and the descriptor. Pure-Python/LuCI package (architecture all). Requires a separately configured Netifyd local flow socket. Statistics remain in /tmp and are lost on reboot.'
           assets=$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name')
-          test "$(printf '%s\n' "$assets" | wc -l)" -eq 3
-          printf '%s\n' "$assets" | grep -Fx 'BetterDPI-0.2.8-openwrt-24.10.8-all.ipk'
-          printf '%s\n' "$assets" | grep -Fx 'BetterDPI-0.2.8-openwrt-25.12.5-all.apk'
+          test "$(printf '%s\n' "$assets" | wc -l)" -eq 6
+          printf '%s\n' "$assets" | grep -Fx "BetterDPI-$package_version-openwrt-24.10.8-all.ipk"
+          printf '%s\n' "$assets" | grep -Fx "BetterDPI-$package_version-openwrt-25.12.5-all.apk"
+          printf '%s\n' "$assets" | grep -Fx 'BetterDPI-openwrt-24.10-all.ipk'
+          printf '%s\n' "$assets" | grep -Fx 'BetterDPI-openwrt-25.12-all.apk'
           printf '%s\n' "$assets" | grep -Fx 'SHA256SUMS'
+          printf '%s\n' "$assets" | grep -Fx 'update.json'
 
   cleanup_rc:
     if: github.ref == 'refs/tags/V0.2.8'

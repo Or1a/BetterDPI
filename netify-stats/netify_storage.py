@@ -5,9 +5,58 @@ import sqlite3
 import time
 import tempfile
 import fcntl
+import re
+import hashlib
+from collections import OrderedDict
+from functools import lru_cache
 
 CONFIG_PATH = '/etc/netify-stats.json'
 MIB = 1024*1024
+GC_BATCH_SIZE = 256
+VACUUM_PAGES_PER_TICK = 128
+MAINTENANCE_BUDGET_SECONDS = .05
+
+
+def read_settings_snapshot():
+    """Read each setting once; invalid fields must not hide valid history."""
+    try:
+        with open(CONFIG_PATH, encoding='utf-8') as handle:
+            values = json.load(handle)
+    except FileNotFoundError:
+        values = {}
+    except (OSError, ValueError) as exc:
+        result = settings_snapshot(None)
+        result['config_error'] = result['storage_error'] = str(exc)
+        return result
+    return settings_snapshot(values)
+
+
+def settings_snapshot(values):
+    """Validate a read or a proposed update without replacing invalid fields."""
+    result = {'enabled': None, 'interface': None, 'max_storage_mib': None,
+              'config_error': '', 'storage_error': ''}
+    if not isinstance(values, dict):
+        result['config_error'] = result['storage_error'] = 'Settings must be a JSON object.'
+        return result
+    errors = []
+    enabled = values.get('enabled', True)
+    if isinstance(enabled, bool):
+        result['enabled'] = enabled
+    else:
+        errors.append('Invalid enabled setting')
+    interface = values.get('interface', '')
+    if isinstance(interface, str) and (not interface or (
+            re.fullmatch(r'[A-Za-z0-9_.:-]{1,64}', interface) and interface not in ('.', '..'))):
+        result['interface'] = interface
+    else:
+        errors.append('Invalid interface setting')
+    try:
+        result['max_storage_mib'] = validate_limit(values.get('max_storage_mib', 0))
+    except ValueError as exc:
+        result['storage_error'] = str(exc)
+        errors.append(str(exc))
+    result['config_error'] = '; '.join(errors)
+    return result
 
 
 def read_limit():
@@ -42,7 +91,7 @@ def read_enabled():
         return True
 
 
-def update_settings(changes, deadline=None):
+def update_settings(changes, deadline=None, validate=None):
     deadline = time.monotonic()+5 if deadline is None else deadline
     with open(CONFIG_PATH+'.lock', 'a') as lock:
         while True:
@@ -58,7 +107,11 @@ def update_settings(changes, deadline=None):
                 values = json.load(handle)
         except FileNotFoundError:
             values = {}
+        if not isinstance(values, dict):
+            raise ValueError('Settings must be a JSON object.')
         values.update(changes)
+        if validate is not None:
+            validate(values)
         _save_settings(values)
 
 
@@ -95,52 +148,107 @@ def settings(path):
     return result
 
 
+def _fingerprint(db, source):
+    """Verify every raw value during migration without retaining rows in RAM."""
+    digest = hashlib.sha256()
+    totals = [0, 0, 0, 0]
+    for row in db.execute('SELECT * FROM (%s) ORDER BY bucket,mac,ip,application,protocol,host' % source):
+        digest.update(json.dumps(tuple(row), separators=(',', ':')).encode())
+        totals[0] += 1
+        for index, value in enumerate(row[-3:], 1):
+            totals[index] += value
+    return tuple(totals), digest.digest()
+
+
+def _hourly_view(table):
+    return '''SELECT h.bucket,d.mac,d.ip,a.value application,p.value protocol,
+        names.value host,h.upload,h.download,h.flows FROM %s h
+        JOIN traffic_devices d ON d.id=h.device_id JOIN traffic_apps a ON a.id=h.app_id
+        JOIN traffic_protocols p ON p.id=h.protocol_id JOIN traffic_hosts names ON names.id=h.host_id''' % table
+
+
+def _host_key(value):
+    # This is only an index bucket, never an identity: every lookup also
+    # compares the complete original string, including when hashes collide.
+    return hashlib.blake2b(value.encode('utf-8'), digest_size=8).digest()
+
+
 def compact_schema(db):
-    # Low-cardinality dimensions share IDs; host strings remain verbatim.
-    # A compatibility view preserves the original nine-column read interface.
+    # All repeated strings, including hosts, live in dictionaries. The integer
+    # primary key keeps both the main table and secondary indexes compact.
+    # The compatibility view still exposes the original raw nine columns.
     db.commit()
+    # Each writer registers its own small cache. Read-only clients need no
+    # function because the hash is an ordinary stored column, not generated.
+    cached_host_key = lru_cache(maxsize=256)(_host_key)
+    db.create_function('netify_host_key', 1,
+                       lambda value: cached_host_key(value) if len(value) <= 253 else _host_key(value),
+                       deterministic=True)
+    if db.execute('PRAGMA user_version').fetchone()[0] > 3:
+        raise sqlite3.DatabaseError('Unsupported statistics schema version')
     kind = db.execute("SELECT type FROM sqlite_master WHERE name='hourly'").fetchone()[0]
-    changed = kind != 'view'
+    columns = {row[1] for row in db.execute('PRAGMA table_info(hourly_data)')}
+    changed = kind != 'view' or 'host_id' not in columns
     if changed:
         with db:
             db.execute('BEGIN IMMEDIATE')
-            before = db.execute('SELECT COUNT(*),SUM(upload),SUM(download),SUM(flows) FROM hourly').fetchone()
-            db.execute('CREATE TABLE traffic_devices (id INTEGER PRIMARY KEY,mac TEXT NOT NULL,ip TEXT NOT NULL,UNIQUE(mac,ip))')
-            db.execute('CREATE TABLE traffic_apps (id INTEGER PRIMARY KEY,value TEXT NOT NULL UNIQUE)')
-            db.execute('CREATE TABLE traffic_protocols (id INTEGER PRIMARY KEY,value TEXT NOT NULL UNIQUE)')
-            db.execute('''CREATE TABLE hourly_data (
+            # A v2 view uses INNER JOINs and can hide orphan child records in
+            # a damaged database. Refuse migration before fingerprinting that
+            # view rather than silently discard those hidden records.
+            if kind == 'view' and db.execute('PRAGMA foreign_key_check').fetchone():
+                raise sqlite3.IntegrityError('Statistics foreign-key integrity check failed; original data was preserved.')
+            before = _fingerprint(db, 'SELECT * FROM hourly')
+            if kind != 'view':
+                db.execute('CREATE TABLE traffic_devices (id INTEGER PRIMARY KEY,mac TEXT NOT NULL,ip TEXT NOT NULL,UNIQUE(mac,ip))')
+                db.execute('CREATE TABLE traffic_apps (id INTEGER PRIMARY KEY,value TEXT NOT NULL UNIQUE)')
+                db.execute('CREATE TABLE traffic_protocols (id INTEGER PRIMARY KEY,value TEXT NOT NULL UNIQUE)')
+                db.execute('INSERT INTO traffic_devices(mac,ip) SELECT DISTINCT mac,ip FROM hourly')
+                db.execute('INSERT INTO traffic_apps(value) SELECT DISTINCT application FROM hourly')
+                db.execute('INSERT INTO traffic_protocols(value) SELECT DISTINCT protocol FROM hourly')
+            db.execute('CREATE TABLE traffic_hosts (id INTEGER PRIMARY KEY,value TEXT NOT NULL,lookup_hash BLOB NOT NULL)')
+            db.execute('CREATE INDEX traffic_host_lookup ON traffic_hosts(lookup_hash)')
+            db.execute('INSERT INTO traffic_hosts(value,lookup_hash) SELECT DISTINCT host,netify_host_key(host) FROM hourly')
+            db.execute('''CREATE TABLE hourly_data_v3 (
                 bucket INTEGER NOT NULL,device_id INTEGER NOT NULL REFERENCES traffic_devices(id),
                 app_id INTEGER NOT NULL REFERENCES traffic_apps(id),
-                protocol_id INTEGER NOT NULL REFERENCES traffic_protocols(id),host TEXT NOT NULL,
+                protocol_id INTEGER NOT NULL REFERENCES traffic_protocols(id),
+                host_id INTEGER NOT NULL REFERENCES traffic_hosts(id),
                 upload INTEGER NOT NULL,download INTEGER NOT NULL,flows INTEGER NOT NULL,
-                PRIMARY KEY(bucket,device_id,app_id,protocol_id,host)) WITHOUT ROWID''')
-            db.execute('INSERT INTO traffic_devices(mac,ip) SELECT DISTINCT mac,ip FROM hourly')
-            db.execute('INSERT INTO traffic_apps(value) SELECT DISTINCT application FROM hourly')
-            db.execute('INSERT INTO traffic_protocols(value) SELECT DISTINCT protocol FROM hourly')
-            db.execute('''INSERT INTO hourly_data SELECT h.bucket,d.id,a.id,p.id,h.host,h.upload,h.download,h.flows
+                PRIMARY KEY(bucket,device_id,app_id,protocol_id,host_id)) WITHOUT ROWID''')
+            db.execute('''INSERT INTO hourly_data_v3 SELECT h.bucket,d.id,a.id,p.id,n.id,h.upload,h.download,h.flows
                 FROM hourly h JOIN traffic_devices d ON h.mac=d.mac AND h.ip=d.ip
-                JOIN traffic_apps a ON h.application=a.value JOIN traffic_protocols p ON h.protocol=p.value''')
-            after = db.execute('SELECT COUNT(*),SUM(upload),SUM(download),SUM(flows) FROM hourly_data').fetchone()
-            if before != after:
+                JOIN traffic_apps a ON h.application=a.value JOIN traffic_protocols p ON h.protocol=p.value
+                JOIN traffic_hosts n ON n.lookup_hash=netify_host_key(h.host) AND n.value=h.host''')
+            if before != _fingerprint(db, _hourly_view('hourly_data_v3')):
                 raise sqlite3.IntegrityError('Statistics migration verification failed; original data was preserved.')
-            db.execute('DROP TABLE hourly')
-            db.execute('''CREATE VIEW hourly AS SELECT h.bucket,d.mac,d.ip,a.value application,
-                p.value protocol,h.host,h.upload,h.download,h.flows FROM hourly_data h
-                JOIN traffic_devices d ON d.id=h.device_id JOIN traffic_apps a ON a.id=h.app_id
-                JOIN traffic_protocols p ON p.id=h.protocol_id''')
+            if kind == 'view':
+                db.execute('DROP VIEW hourly')
+                db.execute('DROP TABLE hourly_data')
+            else:
+                db.execute('DROP TABLE hourly')
+            db.execute('ALTER TABLE hourly_data_v3 RENAME TO hourly_data')
+            db.execute('CREATE VIEW hourly AS ' + _hourly_view('hourly_data'))
             db.execute('''CREATE TRIGGER hourly_insert INSTEAD OF INSERT ON hourly BEGIN
                 INSERT OR IGNORE INTO traffic_devices(mac,ip) VALUES (NEW.mac,NEW.ip);
                 INSERT OR IGNORE INTO traffic_apps(value) VALUES (NEW.application);
                 INSERT OR IGNORE INTO traffic_protocols(value) VALUES (NEW.protocol);
+                INSERT INTO traffic_hosts(value,lookup_hash) SELECT NEW.host,netify_host_key(NEW.host)
+                    WHERE NOT EXISTS (SELECT 1 FROM traffic_hosts
+                        WHERE lookup_hash=netify_host_key(NEW.host) AND value=NEW.host);
                 INSERT INTO hourly_data VALUES (NEW.bucket,
                     (SELECT id FROM traffic_devices WHERE mac=NEW.mac AND ip=NEW.ip),
                     (SELECT id FROM traffic_apps WHERE value=NEW.application),
                     (SELECT id FROM traffic_protocols WHERE value=NEW.protocol),
-                    NEW.host,NEW.upload,NEW.download,NEW.flows)
-                ON CONFLICT(bucket,device_id,app_id,protocol_id,host) DO UPDATE SET
+                    (SELECT id FROM traffic_hosts WHERE lookup_hash=netify_host_key(NEW.host)
+                        AND value=NEW.host),NEW.upload,NEW.download,NEW.flows)
+                ON CONFLICT(bucket,device_id,app_id,protocol_id,host_id) DO UPDATE SET
                     upload=upload+excluded.upload, download=download+excluded.download, flows=flows+excluded.flows;
                 END''')
-            db.execute('PRAGMA user_version=2')
+            db.execute('PRAGMA user_version=3')
+    # These high-cardinality dimensions need indexes for both device filtering
+    # and parent-row FK checks during GC. App/protocol dictionaries stay small.
+    db.execute('CREATE INDEX IF NOT EXISTS hourly_device_bucket ON hourly_data(device_id,bucket)')
+    db.execute('CREATE INDEX IF NOT EXISTS hourly_host ON hourly_data(host_id)')
     db.commit()
     if changed or db.execute('PRAGMA auto_vacuum').fetchone()[0] != 2:
         db.execute('PRAGMA auto_vacuum=INCREMENTAL')
@@ -157,9 +265,135 @@ def record_hourly(db, values):
     db.execute('INSERT INTO hourly VALUES (?,?,?,?,?,?,?,?,?)', values)
 
 
-def prune_dimensions(db):
-    for table, column in (('traffic_devices','device_id'),('traffic_apps','app_id'),('traffic_protocols','protocol_id')):
-        db.execute('DELETE FROM %s WHERE id NOT IN (SELECT %s FROM hourly_data)' % (table,column))
+class HourlyWriter:
+    """Bounded writer-local dimension IDs; clear after every retention/GC tick."""
+    def __init__(self, db, maxsize=1024):
+        self.db = db
+        self.maxsize = maxsize
+        self.cache = OrderedDict()
+
+    def clear_cache(self):
+        self.cache.clear()
+
+    def write(self, values):
+        try:
+            self._write(values)
+        except Exception:
+            # SQLite aborts the failed statement; errors such as SQLITE_FULL
+            # may roll back the transaction too. Never retain IDs from an
+            # uncertain transaction, including dimensions rolled back after
+            # a Python validation/encoding error. Preserve earlier valid rows.
+            self.clear_cache()
+            raise
+
+    def _write(self, values):
+        # Hold the writer transaction before SELECT/INSERT pairs: the compact
+        # host lookup is deliberately nonunique because collisions are valid.
+        if not self.db.in_transaction:
+            self.db.execute('BEGIN IMMEDIATE')
+        created = False
+
+        def before_insert():
+            nonlocal created
+            if not created:
+                self.db.execute('SAVEPOINT hourly_dimensions')
+                created = True
+
+        try:
+            dimensions = (
+                self._dimension('device', tuple(values[1:3]), before_insert),
+                self._dimension('app', (values[3],), before_insert),
+                self._dimension('protocol', (values[4],), before_insert),
+                self._dimension('host', (values[5],), before_insert),
+            )
+            self.db.execute('''INSERT INTO hourly_data VALUES (?,?,?,?,?,?,?,?)
+                ON CONFLICT(bucket,device_id,app_id,protocol_id,host_id) DO UPDATE SET
+                upload=upload+excluded.upload,download=download+excluded.download,flows=flows+excluded.flows''',
+                (values[0], *dimensions, *values[6:]))
+            if created:
+                self.db.execute('RELEASE hourly_dimensions')
+        except Exception:
+            if created and self.db.in_transaction:
+                self.db.execute('ROLLBACK TO hourly_dimensions')
+                self.db.execute('RELEASE hourly_dimensions')
+            raise
+
+    def _dimension(self, kind, values, before_insert):
+        # Cache each dimension independently: 100 devices and 6 domains need
+        # around 108 entries, not 600 combinations that would thrash an LRU.
+        key = (kind, *values)
+        identity = self.cache.get(key)
+        if identity is not None:
+            self.cache.move_to_end(key)
+            return identity
+        if kind == 'device':
+            table, columns, where, args = 'traffic_devices', 'mac,ip', 'mac=? AND ip=?', values
+        elif kind == 'host':
+            table, columns = 'traffic_hosts', 'lookup_hash,value'
+            where, args = 'lookup_hash=? AND value=?', (_host_key(values[0]), values[0])
+        else:
+            table = 'traffic_apps' if kind == 'app' else 'traffic_protocols'
+            columns, where, args = 'value', 'value=?', values
+        row = self.db.execute('SELECT id FROM '+table+' WHERE '+where, args).fetchone()
+        if row is None:
+            before_insert()
+            identity = self.db.execute('INSERT INTO '+table+'('+columns+') VALUES ('+
+                                       ','.join('?' for _ in args)+')', args).lastrowid
+        else:
+            identity = row[0]
+        # Keep unexpected oversized metadata out of this optimization cache;
+        # raw records still retain their complete original values.
+        if self.maxsize > 0 and all(isinstance(value, str) for value in values) and sum(map(len, values)) <= 1024:
+            self.cache[key] = identity
+            if len(self.cache) > self.maxsize:
+                self.cache.popitem(last=False)
+        return identity
+
+
+def correct_hourly(db, row, upload=0, flows=0):
+    """Subtract a late proxy correction only from a still-retained row.
+
+    Unlike record_hourly, this never inserts dimensions or resurrects an hour
+    deleted by retention. A present row with insufficient counters indicates a
+    duplicate/invalid correction, which must not silently create negative data.
+    """
+    if len(row) != 6 or any(isinstance(value, bool) or not isinstance(value, int)
+                           or value < 0 for value in (upload, flows)):
+        raise ValueError('Invalid hourly correction')
+    where = '''bucket=? AND device_id=(SELECT id FROM traffic_devices WHERE mac=? AND ip=?)
+        AND app_id=(SELECT id FROM traffic_apps WHERE value=?)
+        AND protocol_id=(SELECT id FROM traffic_protocols WHERE value=?)
+        AND host_id=(SELECT id FROM traffic_hosts WHERE lookup_hash=netify_host_key(?) AND value=?)'''
+    key = (*row, row[-1])
+    changed = db.execute('UPDATE hourly_data SET upload=upload-?,flows=flows-? WHERE ' +
+                         where + ' AND upload>=? AND flows>=?',
+                         (upload, flows, *key, upload, flows)).rowcount
+    if not changed and db.execute('SELECT 1 FROM hourly_data WHERE ' + where, key).fetchone():
+        raise sqlite3.IntegrityError('Hourly correction exceeds retained counters')
+    return bool(changed)
+
+
+def prune_dimensions(db, limit=GC_BATCH_SIZE, deadline=None):
+    """Bound dictionary cleanup alongside the compact device/host FK indexes.
+
+    The time budget is checked between statements: an individual SQLite scan
+    may take longer. Foreign-key enforcement stays enabled throughout cleanup.
+    """
+    removed = 0
+    for table, column in (('traffic_devices','device_id'),('traffic_apps','app_id'),
+                          ('traffic_protocols','protocol_id'),('traffic_hosts','host_id')):
+        if removed >= limit or (removed and deadline is not None and time.monotonic() >= deadline):
+            return {'removed': removed, 'complete': False}
+        candidates = db.execute('SELECT id FROM %s WHERE id NOT IN (SELECT %s FROM hourly_data) LIMIT ?' %
+                                (table, column), (limit-removed+1,)).fetchall()
+        for (identity,) in candidates:
+            # Always permit one deletion: even a slow candidate scan must
+            # make forward progress rather than repeat forever each tick.
+            if removed >= limit or (removed and deadline is not None and time.monotonic() >= deadline):
+                return {'removed': removed, 'complete': False}
+            db.execute('DELETE FROM %s WHERE id=?' % table, (identity,))
+            removed += 1
+    return {'removed': removed, 'complete': True}
 
 
 class StoragePolicy:
@@ -170,6 +404,18 @@ class StoragePolicy:
         self.pruned_hours = 0
         self.last_checkpoint = float('-inf')
         self.limit = 0
+        self._pruned_buckets = set()
+        # Revisit orphan dimensions after restart too, including leftovers
+        # from an interrupted cleanup that already fell below the size cap.
+        self.cleanup_pending = True
+
+    def take_pruned_buckets(self):
+        """Drain committed evictions so collector dedup/correction state agrees."""
+        if not self._pruned_buckets:
+            return ()
+        buckets = self._pruned_buckets
+        self._pruned_buckets = set()
+        return buckets
 
     def checkpoint(self):
         timeout = self.db.execute('PRAGMA busy_timeout').fetchone()[0]
@@ -184,7 +430,7 @@ class StoragePolicy:
             self.limit = read_limit()
             used = footprint(self.path)['used_bytes']
             over = self.limit and used > self.limit*MIB
-            if not over and time.monotonic()-self.last_checkpoint < 60:
+            if not over and not self.cleanup_pending and time.monotonic()-self.last_checkpoint < 60:
                 self.error = ''
                 return
             # A long-lived reader can pin WAL pages. Never delete extra history
@@ -195,14 +441,22 @@ class StoragePolicy:
                 self.error = 'Storage cleanup is waiting for active queries to finish.'
                 return
             self.last_checkpoint = time.monotonic()
-            if self.limit and footprint(self.path)['used_bytes'] > self.limit*MIB:
-                prune_dimensions(self.db)
+            over = bool(self.limit and footprint(self.path)['used_bytes'] > self.limit*MIB)
+            if over or self.cleanup_pending:
+                deadline = time.monotonic() + MAINTENANCE_BUDGET_SECONDS
+                garbage = prune_dimensions(self.db, deadline=deadline)
+                dimensions_removed = garbage['removed']
                 target = int(self.limit*MIB*0.85) - 32768
                 page_size = self.db.execute('PRAGMA page_size').fetchone()[0]
                 removed = 0
+                removed_buckets = set()
                 # Bound synchronous reclamation work; large reductions continue
                 # on subsequent maintenance ticks after dictionary GC.
                 for _ in range(16):
+                    # Reclaim orphan dimensions first; their still-occupied
+                    # pages must not cause unnecessary deletion of history.
+                    if not over or not garbage['complete'] or (removed and time.monotonic() >= deadline):
+                        break
                     live = (self.db.execute('PRAGMA page_count').fetchone()[0] - self.db.execute('PRAGMA freelist_count').fetchone()[0])*page_size
                     if live <= target:
                         break
@@ -212,15 +466,24 @@ class StoragePolicy:
                     self.db.execute('DELETE FROM hourly_data WHERE bucket=?', (oldest,))
                     self.db.execute('DELETE FROM interface_hourly WHERE bucket=?', (oldest,))
                     removed += 1
-                if removed:
-                    prune_dimensions(self.db)
+                    removed_buckets.add(oldest)
+                    # Host dictionaries can occupy more space than the rows
+                    # just removed. Finish reclaiming those orphan entries
+                    # before deciding whether another hour really must go.
+                    garbage = prune_dimensions(self.db, limit=GC_BATCH_SIZE-dimensions_removed, deadline=deadline)
+                    dimensions_removed += garbage['removed']
+                if removed or dimensions_removed:
                     # Dimensions were just pruned. Do not rejoin every retained
                     # traffic row merely to find the small set of active MACs.
                     self.db.execute('DELETE FROM device_latest WHERE mac NOT IN (SELECT mac FROM traffic_devices)')
+                self.db.execute('PRAGMA incremental_vacuum(%d)' % VACUUM_PAGES_PER_TICK).fetchall()
+                pending = not garbage['complete'] or self.db.execute('PRAGMA freelist_count').fetchone()[0] > 0
+                self.db.commit()
+                self.cleanup_pending = pending
+                if removed:
                     self.last_pruned = int(time.time())
                     self.pruned_hours += removed
-                self.db.execute('PRAGMA incremental_vacuum').fetchall()
-                self.db.commit()
+                    self._pruned_buckets.update(removed_buckets)
                 self.checkpoint()
             self.error = ''
             if self.limit and footprint(self.path)['used_bytes'] > self.limit*MIB:
@@ -232,4 +495,5 @@ class StoragePolicy:
     def status(self):
         return dict(footprint(self.path), max_storage_mib=self.limit,
                     last_pruned=self.last_pruned, pruned_hours=self.pruned_hours,
+                    cleanup_pending=self.cleanup_pending,
                     error=self.error)
