@@ -782,3 +782,24 @@ msgstr "无法连接更新服务：%s"
 
 msgid "An application update is being installed. Wait for it to finish before changing analysis."
 msgstr "应用更新正在安装，请等待完成后再操作分析开关。"
+
+msgid "Historical domain traffic"
+msgstr "历史域名流量"
+
+msgid "Domain only (details compacted)"
+msgstr "仅识别域名（明细已压缩）"
+
+msgid "Includes historical totals. Old domains and rule evidence were removed; displayed samples cover retained details only."
+msgstr "包含历史累计。旧域名和规则证据已删除，显示的样本仅来自保留的明细。"
+
+msgid "Old data is kept as cumulative device, application and protocol totals, without daily records. All includes these totals; recent ranges, trends and domain searches cover retained details only."
+msgstr "旧数据仅保留设备、应用和协议的累计统计，不按天存储。“全部”包含历史累计；近期时段、趋势和域名搜索仅覆盖保留的明细。"
+
+msgid "Historical totals included in these results: download %s, upload %s."
+msgstr "当前结果包含历史累计：下载 %s，上传 %s。"
+
+msgid "When the storage limit is reached, old cumulative entries are removed before hourly details. Save this setting?"
+msgstr "达到容量上限时，先删除旧累计条目，再删除小时明细。保存此设置？"
+
+msgid "Details are kept for 7 days, then compacted into cumulative device, application and protocol totals. 0 means unlimited. At the limit, old cumulative entries are removed before hourly details. Writes may temporarily exceed the limit. Records stay in /tmp and are cleared on reboot; the capacity setting is kept."
+msgstr "保留最近 7 天明细，之后压缩为设备、应用和协议的累计统计。0 表示不限容量。达到上限时先删除旧累计条目，再删除小时明细。写入可能暂时超出上限。记录仍保存在 /tmp，重启后清空；容量设置会保留。"

@@ -98,7 +98,7 @@ const chinese = /[\u3400-\u9fff]/u;
   walk(saved.root).find(node => node.tag === 'input' && node.attrs.type === 'number').value = '4';
   await button(saved.root, _('Save storage setting')).attrs.click();
   assert.deepEqual(writes, [4]);
-  assert.deepEqual(confirmations, [_('When the storage limit is reached, the oldest hours of statistics will be deleted first. Save this setting?')]);
+  assert.deepEqual(confirmations, [_('When the storage limit is reached, old cumulative entries are removed before hourly details. Save this setting?')]);
   assert(visible(saved.root).includes(_('Saved. The collector will apply the setting automatically.')));
 
   const nested = {...base(), control: {enabled: false, actual_state: 'partial', applied: false,

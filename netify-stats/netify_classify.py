@@ -221,6 +221,8 @@ class Classifier:
         return evidence
 
     def describe(self, key):
+        if key == 'archive:domain':
+            return 'Historical domain traffic', '仅识别域名（明细已归档）'
         if key.startswith('infrastructure:'):
             return SHARED_PROVIDERS[key.split(':', 1)[1]][0], '基础设施归属，应用未识别'
         if key.startswith('community:'):
@@ -241,7 +243,7 @@ class Classifier:
     def identification_level(key):
         if key == 'Unknown':
             return 'unknown'
-        if key.startswith(('domain:', 'infrastructure:')):
+        if key == 'archive:domain' or key.startswith(('domain:', 'infrastructure:')):
             return 'domain'
         if key.startswith('protocol:'):
             return 'protocol'
@@ -253,7 +255,10 @@ class Classifier:
         Keep describe() and the API's name/source fields backward-compatible.
         Source names are factual provenance and should never be translated.
         """
-        if key.startswith('community:'):
+        if key == 'archive:domain':
+            result = {'name_i18n': 'Historical domain traffic',
+                      'source_type': 'archived_domain', 'source_names': []}
+        elif key.startswith('community:'):
             tag = key.split(':', 1)[1]
             names = {source['id']: source['name'] for source in self.rules.get('sources', [])}
             result = {'name_i18n': APP_NAME_MSGIDS.get(tag, ''),
@@ -294,5 +299,6 @@ class Classifier:
             'native': 'native_app', 'community': 'community_rule',
             'protocol': 'protocol_fallback', 'unknown': 'insufficient_metadata',
             'infrastructure': 'shared_infrastructure',
+            'archived_domain': 'archived_domain',
         }.get(result['source_type'], evidence[0]['reason'] if evidence else 'unmatched_domain')
         return result

@@ -146,6 +146,18 @@ def query_summary(params):
             oldest = [db.execute('SELECT MIN(bucket) FROM '+name).fetchone()[0] for name in tables]
             response['range_start'] = min((value for value in oldest if value is not None), default=now)
             response['range_end'] = max(now, newest)
+        has_archive = bool(db.execute("SELECT 1 FROM sqlite_master WHERE name='traffic_archive'").fetchone())
+        if has_archive:
+            boundaries = db.execute('''SELECT MIN(first_bucket),MAX(last_bucket) FROM (
+                SELECT first_bucket,last_bucket FROM traffic_archive UNION ALL
+                SELECT first_bucket,last_bucket FROM interface_archive)''').fetchone()
+            if boundaries[0] is not None:
+                if not hours:
+                    response['range_start'] = min(response['range_start'], boundaries[0])
+                    response['range_end'] = max(response['range_end'], boundaries[1])
+                if boundaries[1] > current_bucket:
+                    response['clock_anomaly'] = True
+                    response['clock_warning'] = 'Retained records extend beyond the current system time.'
         end = current_bucket if hours else None
         if has_interfaces:
             where = 'bucket >= ?' + (' AND bucket <= ?' if end is not None else '')
@@ -154,12 +166,26 @@ def query_summary(params):
                 SELECT name, SUM(download) download, SUM(upload) upload,
                        MIN(since) since, MAX(until) until, SUM(resets) resets
                 FROM interface_hourly WHERE '''+where+' GROUP BY name ORDER BY name', args)]
+        if has_archive and not hours:
+            interfaces = {row['name']: row for row in response['interfaces']}
+            for row in db.execute('SELECT name,download,upload,since,until,resets FROM interface_archive'):
+                name = row['name']
+                if name not in interfaces:
+                    interfaces[name] = dict(row)
+                else:
+                    for key in ('download','upload','resets'):
+                        interfaces[name][key] += row[key]
+                    interfaces[name]['since'] = min(interfaces[name]['since'], row['since'])
+                    interfaces[name]['until'] = max(interfaces[name]['until'], row['until'])
+            response['interfaces'] = [interfaces[name] for name in sorted(interfaces)]
         latest_ips = {}
         if db.execute("SELECT 1 FROM sqlite_master WHERE name='device_latest'").fetchone():
             latest_ips = dict(db.execute('SELECT mac, ip FROM device_latest'))
         response.update(aggregate(db, start, device, now, classifier, names, latest_ips,
                                   app_page, device_page, sort, direction, expanded, end=end,
                                   identification=identification, search=search, application=application))
+        if has_archive and db.execute('SELECT 1 FROM interface_archive LIMIT 1').fetchone():
+            response['history_compacted'] = True
     return response
 
 

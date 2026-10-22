@@ -86,6 +86,11 @@ def _aggregate(db, start, device, now, classifier, names, latest_ips,
     apps, devices = {}, {}
     total = _counts()
     hour_totals = {}
+    archived_total = _counts()
+    archive_devices = {}
+    has_archive = normalized and bool(db.execute(
+        "SELECT 1 FROM sqlite_master WHERE name='traffic_archive'").fetchone())
+    include_archive = has_archive and start == 0 and end is None
 
     requested = set(expanded)
     detail_hosts, detail_members = {}, {}
@@ -213,6 +218,38 @@ def _aggregate(db, start, device, now, classifier, names, latest_ips,
         hour[0] += upload
         hour[1] += download
 
+    if include_archive:
+        archive_where, archive_args = '', []
+        if device:
+            archive_where = ' WHERE device_id IN (SELECT id FROM traffic_devices WHERE mac=? OR ip=?)'
+            archive_args = [device, device]
+        for key, app, upload, download, flows in db.execute(
+                'SELECT device_id,application,SUM(upload),SUM(download),SUM(flows) '
+                'FROM traffic_archive'+archive_where+' GROUP BY device_id,application', archive_args):
+            # These are frozen classification IDs, not raw native app names.
+            # Domain samples were removed, so only the retained labels match.
+            if filtered and not matches(app, ''):
+                continue
+            if app not in apps:
+                apps[app] = _counts(id=app, identification_level=classifier.identification_level(app))
+            _add(apps[app], upload, download, flows)
+            apps[app]['has_archived_data'] = True
+            mac, ip = device_labels[key]
+            if mac not in devices:
+                devices[mac] = _counts(mac=mac, ip=ip)
+            else:
+                devices[mac]['ip'] = max(devices[mac]['ip'], ip)
+            _add(devices[mac], upload, download, flows)
+            _add(total, upload, download, flows)
+            _add(archived_total, upload, download, flows)
+            if app in requested:
+                members = archive_devices.setdefault(app, {})
+                if mac not in members:
+                    members[mac] = _counts(mac=mac, ip=ip)
+                else:
+                    members[mac]['ip'] = max(members[mac]['ip'], ip)
+                _add(members[mac], upload, download, flows)
+
     # Reuse completed application aggregates before pagination, rather than
     # incrementing coverage again for every host/protocol row. This is tiny for
     # the common case of many IPs collapsing to a few protocol-only groups.
@@ -245,7 +282,7 @@ def _aggregate(db, start, device, now, classifier, names, latest_ips,
     # record. The protocol dimension matters when domain/app evidence is absent.
     selected = {row['id']:row for row in app_rows if row['id'] in expanded}
     if selected:
-        app_devices = {key:{} for key in selected}
+        app_devices = {key:archive_devices.get(key, {}) for key in selected}
         native_keys = sorted({key[0] for key, app in detail_members.items() if app in selected})
         detail_where = where+' AND '+native_column+' IN (%s)' % ','.join('?' for _ in native_keys)
         detail_columns = device_columns+','+native_column+','+protocol_column+','+host_column
@@ -300,6 +337,9 @@ def _aggregate(db, start, device, now, classifier, names, latest_ips,
         ip = latest_ips.get(mac, choice_ips[mac]) or ''
         choices.append({'mac': mac, 'ip': ip, 'name': names.get(mac, names.get(ip, mac))})
     return {'total':total,'classification_coverage':coverage,
+            'archived_total':archived_total,
+            'history_compacted':bool(has_archive and db.execute('SELECT 1 FROM traffic_archive LIMIT 1').fetchone()),
+            'archive_included':bool(include_archive and any(archived_total.values())),
             'app_count':len(apps),'device_count':len(devices),
             'app_page':app_page,'device_page':device_page,'applications':app_rows,
             'devices':device_rows,'device_choices':choices,'timeline':list(timeline.values()),

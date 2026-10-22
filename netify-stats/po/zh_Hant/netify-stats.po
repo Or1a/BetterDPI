@@ -782,3 +782,24 @@ msgstr "無法連線至更新服務：%s"
 
 msgid "An application update is being installed. Wait for it to finish before changing analysis."
 msgstr "應用程式更新正在安裝，請等待完成後再操作分析開關。"
+
+msgid "Historical domain traffic"
+msgstr "歷史網域流量"
+
+msgid "Domain only (details compacted)"
+msgstr "僅識別網域（明細已壓縮）"
+
+msgid "Includes historical totals. Old domains and rule evidence were removed; displayed samples cover retained details only."
+msgstr "包含歷史累計。舊網域和規則證據已刪除，顯示的樣本僅來自保留的明細。"
+
+msgid "Old data is kept as cumulative device, application and protocol totals, without daily records. All includes these totals; recent ranges, trends and domain searches cover retained details only."
+msgstr "舊資料僅保留裝置、應用程式和協定的累計統計，不按天儲存。「全部」包含歷史累計；近期時段、趨勢和網域搜尋僅涵蓋保留的明細。"
+
+msgid "Historical totals included in these results: download %s, upload %s."
+msgstr "目前結果包含歷史累計：下載 %s，上傳 %s。"
+
+msgid "When the storage limit is reached, old cumulative entries are removed before hourly details. Save this setting?"
+msgstr "達到容量上限時，先刪除舊累計項目，再刪除小時明細。儲存此設定？"
+
+msgid "Details are kept for 7 days, then compacted into cumulative device, application and protocol totals. 0 means unlimited. At the limit, old cumulative entries are removed before hourly details. Writes may temporarily exceed the limit. Records stay in /tmp and are cleared on reboot; the capacity setting is kept."
+msgstr "保留最近 7 天明細，之後壓縮為裝置、應用程式和協定的累計統計。0 表示不限容量。達到上限時先刪除舊累計項目，再刪除小時明細。寫入可能暫時超出上限。記錄仍儲存在 /tmp，重新啟動後清空；容量設定會保留。"

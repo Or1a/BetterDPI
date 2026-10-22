@@ -81,7 +81,7 @@ class Collector:
             kind INTEGER NOT NULL, identity TEXT NOT NULL,
             PRIMARY KEY(bucket,interface,kind,identity)) WITHOUT ROWID''')
         self.db.execute('PRAGMA temp.cache_size=-256')
-        self.storage = StoragePolicy(self.db, DB_PATH)
+        self.storage = StoragePolicy(self.db, DB_PATH, self.archive_guard)
         self.excluded = set()
         # Global arrival order handles bounded retention; per-flow indexes let
         # recovery touch only that flow's events, not every other queued event.
@@ -261,6 +261,13 @@ class Collector:
             # Session counters include already-pruned history, so their
             # original duplicate upload still needs correcting either way.
             self.upload -= upload
+
+    def archive_guard(self):
+        # A wall-clock jump can make recently received proxy candidates look
+        # seven days old. Keep their hour mutable until reconciliation/expiry.
+        # Storage calls this only when an archive check is due, not per event.
+        return min((row[0] for candidate in self.original_candidates.values()
+                    for row in candidate['entries']), default=None)
 
     def sync_retention(self):
         buckets = self.storage.take_pruned_buckets()

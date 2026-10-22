@@ -100,7 +100,8 @@ function applicationName(item) {
 		"protocol:ssh": _("SSH / remote access"),
 		"protocol:vpn": _("VPN protocol"),
 		"protocol:tcp": _("TCP"),
-		"protocol:udp": _("UDP")
+		"protocol:udp": _("UDP"),
+		"archive:domain": _("Historical domain traffic")
 	};
 	var name = Object.prototype.hasOwnProperty.call(known, item.id) ? known[item.id] : (item.name_i18n ? _(item.name_i18n) : esc(item.name));
 	if (item.source_type === 'infrastructure') return _("%s (infrastructure; application unidentified)").format(name);
@@ -114,6 +115,7 @@ function sourceLabel(item) {
 		community: _("Community domain rules"),
 		infrastructure: _("Shared infrastructure"),
 		domain: _("Domain only"),
+		archived_domain: _("Domain only (details compacted)"),
 		protocol: _("Protocol only"),
 		unknown: _("Unidentified")
 	};
@@ -138,6 +140,7 @@ function classificationDetails(item) {
 	return E('section', { 'class': 'ns-classification' }, [
 		E('h4', {}, _("Classification details")),
 		E('p', {}, sourceLabel(item)),
+		item.has_archived_data ? E('p', { 'class': 'ns-archive-detail' }, _("Includes historical totals. Old domains and rule evidence were removed; displayed samples cover retained details only.")) : E('span'),
 		E('div', {}, evidence.map(function(entry) {
 			var children = [ E('p', {}, explanations[entry.reason] || _("Classification details are unavailable.")) ];
 			if (entry.matched_domain) {
@@ -612,6 +615,8 @@ return view.extend({
 		var devicePages = Math.max(1, Math.ceil((data.device_count || 0) / PAGE_SIZE));
 		this.devicePage = Math.min(Math.max(this.devicePage || 1, 1), devicePages);
 		return E('div', { 'class': 'ns-dashboard', 'aria-live': 'polite' }, [
+			data.history_compacted ? E('p', { 'class': 'ns-archive-notice' }, _("Old data is kept as cumulative device, application and protocol totals, without daily records. All includes these totals; recent ranges, trends and domain searches cover retained details only.")) : E('span'),
+			data.archive_included ? E('p', { 'class': 'ns-archive-totals' }, _("Historical totals included in these results: download %s, upload %s.").format(bytes(data.archived_total && data.archived_total.download), bytes(data.archived_total && data.archived_total.upload))) : E('span'),
 			filtered ? E('p', { 'class': 'ns-result-scope' }, _("Results follow the selected filters. Matching an application name includes its traffic; matching only a domain includes only that domain's records.")) : E('span'),
 			E('section', { 'class': 'ns-section ns-trend-section' }, [ E('div', { 'class': 'ns-section-head' }, [ E('h3', {}, _("Device traffic trend")), E('div', { 'class': 'ns-legend' }, [ E('span', { 'class': 'download' }, _("Download")), E('span', { 'class': 'upload' }, _("Upload")) ]) ]), timeline(data.timeline, data.timeline_resolution_seconds, this.trendSelection, data.clock_anomaly) ]),
 			data.config_error ? E('p', { 'class': 'ns-config-error', 'role': 'alert' }, _("Settings are invalid. Historical data is still available. %s").format(errorMessage(data.config_error))) : E('span'),
@@ -892,7 +897,7 @@ return view.extend({
 			if (!String(storageInput.value).trim() || !Number.isInteger(value) || !(value === 0 || value >= 4 && value <= 4096)) {
 				dom.content(storageMessage, _("Enter 0 (unlimited) or an integer from 4 to 4096 MiB.")); return;
 			}
-			if (value && !window.confirm(_("When the storage limit is reached, the oldest hours of statistics will be deleted first. Save this setting?"))) return;
+			if (value && !window.confirm(_("When the storage limit is reached, old cumulative entries are removed before hourly details. Save this setting?"))) return;
 			storageSave.disabled = true; storageInput.disabled = true;
 			return setStorage(value).then(L.bind(function(result) {
 				if (result.error) throw new Error(result.error);
@@ -904,7 +909,7 @@ return view.extend({
 		root.appendChild(E('section', { 'class': 'ns-section ns-storage-settings' }, [ E('div', { 'class': 'ns-section-head' }, E('h3', {}, _("Storage settings"))),
 			this.storageUsage,
 			E('div', { 'class': 'ns-controls' }, [ E('label', {}, [ _("Record limit (MiB)") + ' ', storageInput ]), storageSave ]),
-			E('p', { 'class': 'ns-range' }, _("0 means unlimited. At the limit, the oldest hours are removed first. Writes may temporarily exceed the limit. Records stay in memory and are cleared on reboot; the capacity setting is kept.")), storageMessage
+			E('p', { 'class': 'ns-range' }, _("Details are kept for 7 days, then compacted into cumulative device, application and protocol totals. 0 means unlimited. At the limit, old cumulative entries are removed before hourly details. Writes may temporarily exceed the limit. Records stay in /tmp and are cleared on reboot; the capacity setting is kept.")), storageMessage
 		]));
 		this.updatePanel = E('section', { 'class': 'ns-section ns-update-panel' });
 		root.appendChild(this.updatePanel);

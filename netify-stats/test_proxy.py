@@ -42,7 +42,7 @@ class ProxyTest(unittest.TestCase):
               '%06d.' % i + '.'.join(['a'*60]*3) + '.example', 1, 1, 1)
              for i in range(25000)))
         instance.db.commit()
-        with patch.object(storage, 'read_limit', return_value=4):
+        with patch.object(storage, 'read_limit', return_value=4), patch.object(storage.time, 'time', return_value=bucket+1):
             for _ in range(40):
                 instance.storage.maintain()
                 if instance.storage.pruned_hours:

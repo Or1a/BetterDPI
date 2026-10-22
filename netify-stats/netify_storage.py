@@ -1,4 +1,4 @@
-"""Compact SQLite schema and user-controlled, oldest-hour-first retention."""
+"""Compact SQLite storage, seven-day details and cumulative history."""
 import json
 import os
 import sqlite3
@@ -15,6 +15,8 @@ MIB = 1024*1024
 GC_BATCH_SIZE = 256
 VACUUM_PAGES_PER_TICK = 128
 MAINTENANCE_BUDGET_SECONDS = .05
+DETAIL_RETENTION_SECONDS = 7*24*3600
+ARCHIVE_BATCH_SIZE = 256
 
 
 def read_settings_snapshot():
@@ -184,7 +186,7 @@ def compact_schema(db):
     db.create_function('netify_host_key', 1,
                        lambda value: cached_host_key(value) if len(value) <= 253 else _host_key(value),
                        deterministic=True)
-    if db.execute('PRAGMA user_version').fetchone()[0] > 3:
+    if db.execute('PRAGMA user_version').fetchone()[0] > 4:
         raise sqlite3.DatabaseError('Unsupported statistics schema version')
     kind = db.execute("SELECT type FROM sqlite_master WHERE name='hourly'").fetchone()[0]
     columns = {row[1] for row in db.execute('PRAGMA table_info(hourly_data)')}
@@ -249,6 +251,20 @@ def compact_schema(db):
     # and parent-row FK checks during GC. App/protocol dictionaries stay small.
     db.execute('CREATE INDEX IF NOT EXISTS hourly_device_bucket ON hourly_data(device_id,bucket)')
     db.execute('CREATE INDEX IF NOT EXISTS hourly_host ON hourly_data(host_id)')
+    # Cumulative history has no host or hourly key. Keep the resolved app ID,
+    # so deleting domain evidence never turns a recognized app into Unknown.
+    db.execute('''CREATE TABLE IF NOT EXISTS traffic_archive (
+        device_id INTEGER NOT NULL REFERENCES traffic_devices(id),
+        application TEXT NOT NULL,protocol_id INTEGER NOT NULL REFERENCES traffic_protocols(id),
+        upload INTEGER NOT NULL,download INTEGER NOT NULL,flows INTEGER NOT NULL,
+        first_bucket INTEGER NOT NULL,last_bucket INTEGER NOT NULL,
+        PRIMARY KEY(device_id,application,protocol_id)) WITHOUT ROWID''')
+    db.execute('CREATE INDEX IF NOT EXISTS archive_oldest ON traffic_archive(last_bucket)')
+    db.execute('''CREATE TABLE IF NOT EXISTS interface_archive (
+        name TEXT PRIMARY KEY,download INTEGER NOT NULL,upload INTEGER NOT NULL,
+        since INTEGER NOT NULL,until INTEGER NOT NULL,resets INTEGER NOT NULL,
+        first_bucket INTEGER NOT NULL,last_bucket INTEGER NOT NULL) WITHOUT ROWID''')
+    db.execute('PRAGMA user_version=4')
     db.commit()
     if changed or db.execute('PRAGMA auto_vacuum').fetchone()[0] != 2:
         db.execute('PRAGMA auto_vacuum=INCREMENTAL')
@@ -384,8 +400,11 @@ def prune_dimensions(db, limit=GC_BATCH_SIZE, deadline=None):
                           ('traffic_protocols','protocol_id'),('traffic_hosts','host_id')):
         if removed >= limit or (removed and deadline is not None and time.monotonic() >= deadline):
             return {'removed': removed, 'complete': False}
-        candidates = db.execute('SELECT id FROM %s WHERE id NOT IN (SELECT %s FROM hourly_data) LIMIT ?' %
-                                (table, column), (limit-removed+1,)).fetchall()
+        references = 'SELECT %s FROM hourly_data' % column
+        if column in ('device_id', 'protocol_id'):
+            references += ' UNION SELECT %s FROM traffic_archive' % column
+        candidates = db.execute('SELECT id FROM %s WHERE id NOT IN (%s) LIMIT ?' %
+                                (table, references), (limit-removed+1,)).fetchall()
         for (identity,) in candidates:
             # Always permit one deletion: even a slow candidate scan must
             # make forward progress rather than repeat forever each tick.
@@ -397,8 +416,9 @@ def prune_dimensions(db, limit=GC_BATCH_SIZE, deadline=None):
 
 
 class StoragePolicy:
-    def __init__(self, db, path):
+    def __init__(self, db, path, archive_guard=None):
         self.db, self.path = db, path
+        self.archive_guard = archive_guard
         self.error = ''
         self.last_pruned = 0
         self.pruned_hours = 0
@@ -408,6 +428,9 @@ class StoragePolicy:
         # Revisit orphan dimensions after restart too, including leftovers
         # from an interrupted cleanup that already fell below the size cap.
         self.cleanup_pending = True
+        self.archive_pending = True
+        self.last_archive_check = float('-inf')
+        self._archive_classifier = None
 
     def take_pruned_buckets(self):
         """Drain committed evictions so collector dedup/correction state agrees."""
@@ -425,9 +448,108 @@ class StoragePolicy:
         finally:
             self.db.execute('PRAGMA busy_timeout=%d' % timeout)
 
+    def release_archive_classifier(self):
+        if self._archive_classifier is not None:
+            # The LRU wraps a bound method, creating a self-reference. Break
+            # it so a router releases the rule dictionary immediately instead
+            # of waiting for cyclic garbage collection after each hourly job.
+            del self._archive_classifier._classify_domain
+            self._archive_classifier = None
+
+    def archive(self, now=None):
+        """Move a bounded batch atomically; a crash cannot double-count bytes.
+
+        Caller commits collection first. A partially processed hour remains
+        in hourly_data and is revisited on the next tick. Only complete hours
+        notify the collector that its correction/dedup state can be discarded.
+        """
+        now = int(time.time()) if now is None else now
+        cutoff = now//3600*3600 - DETAIL_RETENTION_SECONDS
+        if self.archive_guard is not None:
+            protected = self.archive_guard()
+            if protected is not None:
+                cutoff = min(cutoff, protected)
+        deadline = time.monotonic() + MAINTENANCE_BUDGET_SECONDS
+        buckets = set()
+        with self.db:
+            self.db.execute('BEGIN IMMEDIATE')
+            rows = self.db.execute('''SELECT h.bucket,h.device_id,h.app_id,h.protocol_id,h.host_id,
+                h.upload,h.download,h.flows,a.value,p.value,n.value
+                FROM (SELECT * FROM hourly_data WHERE bucket<? ORDER BY
+                    bucket,device_id,app_id,protocol_id,host_id LIMIT ?) h
+                JOIN traffic_apps a ON a.id=h.app_id
+                JOIN traffic_protocols p ON p.id=h.protocol_id
+                JOIN traffic_hosts n ON n.id=h.host_id''',
+                (cutoff, ARCHIVE_BATCH_SIZE)).fetchall()
+            if rows and self._archive_classifier is None:
+                from netify_classify import Classifier
+                self._archive_classifier = Classifier()
+                # The collector does not need the query process's large cache.
+                self._archive_classifier._classify_domain = lru_cache(maxsize=256)(
+                    self._archive_classifier._classify_domain.__wrapped__)
+            classifier = self._archive_classifier
+            if rows and classifier.error:
+                self.release_archive_classifier()  # Retry after the rules file is repaired.
+                raise ValueError('History compaction requires readable classification rules: ' + classifier.error)
+            processed = 0
+            for bucket, device, native, protocol, host, up, down, flows, app, proto, domain in rows:
+                resolved = classifier.classify(app, domain, proto)
+                if resolved.startswith('domain:'):
+                    resolved = 'archive:domain'
+                self.db.execute('''INSERT INTO traffic_archive VALUES (?,?,?,?,?,?,?,?)
+                    ON CONFLICT(device_id,application,protocol_id) DO UPDATE SET
+                    upload=upload+excluded.upload,download=download+excluded.download,
+                    flows=flows+excluded.flows,first_bucket=MIN(first_bucket,excluded.first_bucket),
+                    last_bucket=MAX(last_bucket,excluded.last_bucket)''',
+                    (device,resolved,protocol,up,down,flows,bucket,bucket))
+                self.db.execute('''DELETE FROM hourly_data WHERE bucket=? AND device_id=?
+                    AND app_id=? AND protocol_id=? AND host_id=?''',
+                    (bucket,device,native,protocol,host))
+                buckets.add(bucket)
+                processed += 1
+                # Domain samples are deliberately not retained in the archive.
+                classifier.app_sources.clear()
+                classifier.app_evidence.clear()
+                classifier.evidence_truncated.clear()
+                if time.monotonic() >= deadline:
+                    break
+            # Interface counters are independent from DPI counters. Bound these
+            # too, and never reset the live interface sampling baseline.
+            interfaces = self.db.execute('''SELECT * FROM interface_hourly
+                WHERE bucket<? ORDER BY bucket,name LIMIT ?''', (cutoff, ARCHIVE_BATCH_SIZE)).fetchall()
+            for bucket, name, down, up, since, until, resets in interfaces:
+                self.db.execute('''INSERT INTO interface_archive VALUES (?,?,?,?,?,?,?,?)
+                    ON CONFLICT(name) DO UPDATE SET download=download+excluded.download,
+                    upload=upload+excluded.upload,since=MIN(since,excluded.since),
+                    until=MAX(until,excluded.until),resets=resets+excluded.resets,
+                    first_bucket=MIN(first_bucket,excluded.first_bucket),
+                    last_bucket=MAX(last_bucket,excluded.last_bucket)''',
+                    (name,down,up,since,until,resets,bucket,bucket))
+                self.db.execute('DELETE FROM interface_hourly WHERE bucket=? AND name=?', (bucket,name))
+                buckets.add(bucket)
+                if time.monotonic() >= deadline:
+                    break
+            complete = {bucket for bucket in buckets if not self.db.execute(
+                'SELECT 1 FROM hourly_data WHERE bucket=? LIMIT 1', (bucket,)).fetchone()}
+            pending = any(self.db.execute('SELECT 1 FROM '+table+' WHERE bucket<? LIMIT 1',
+                                         (cutoff,)).fetchone()
+                          for table in ('hourly_data','interface_hourly'))
+        # Publish only after the transaction committed successfully.
+        self._pruned_buckets.update(complete)
+        self.archive_pending = pending
+        self.last_archive_check = time.monotonic()
+        if buckets:
+            self.cleanup_pending = True
+        if not pending:
+            self.release_archive_classifier()
+        return processed
+
     def maintain(self):
         try:
             self.limit = read_limit()
+            self.db.commit()
+            if self.archive_pending or time.monotonic()-self.last_archive_check >= 60:
+                self.archive()
             used = footprint(self.path)['used_bytes']
             over = self.limit and used > self.limit*MIB
             if not over and not self.cleanup_pending and time.monotonic()-self.last_checkpoint < 60:
@@ -455,11 +577,29 @@ class StoragePolicy:
                 for _ in range(16):
                     # Reclaim orphan dimensions first; their still-occupied
                     # pages must not cause unnecessary deletion of history.
-                    if not over or not garbage['complete'] or (removed and time.monotonic() >= deadline):
+                    if self.archive_pending or not over or not garbage['complete'] or (removed and time.monotonic() >= deadline):
                         break
                     live = (self.db.execute('PRAGMA page_count').fetchone()[0] - self.db.execute('PRAGMA freelist_count').fetchone()[0])*page_size
                     if live <= target:
                         break
+                    # Cumulative entries cannot be split back into hours.
+                    # Under an explicit capacity cap, evict the oldest summary
+                    # first; avoid dropping recent details to keep old totals.
+                    archived = self.db.execute('''SELECT last_bucket,0,device_id,application,protocol_id
+                        FROM traffic_archive UNION ALL SELECT last_bucket,1,0,name,0
+                        FROM interface_archive ORDER BY 1 LIMIT 1''').fetchone()
+                    if archived is not None:
+                        _, kind, identity, app, protocol = archived
+                        if kind:
+                            self.db.execute('DELETE FROM interface_archive WHERE name=?', (app,))
+                        else:
+                            self.db.execute('DELETE FROM traffic_archive WHERE device_id=? AND application=? AND protocol_id=?',
+                                            (identity,app,protocol))
+                        garbage = prune_dimensions(self.db, limit=GC_BATCH_SIZE-dimensions_removed, deadline=deadline)
+                        dimensions_removed += garbage['removed']
+                        if time.monotonic() >= deadline:
+                            break
+                        continue
                     oldest = self.db.execute('SELECT MIN(bucket) FROM (SELECT MIN(bucket) bucket FROM hourly_data UNION ALL SELECT MIN(bucket) FROM interface_hourly)').fetchone()[0]
                     if oldest is None:
                         break
@@ -495,5 +635,6 @@ class StoragePolicy:
     def status(self):
         return dict(footprint(self.path), max_storage_mib=self.limit,
                     last_pruned=self.last_pruned, pruned_hours=self.pruned_hours,
-                    cleanup_pending=self.cleanup_pending,
+                    cleanup_pending=self.cleanup_pending, archive_pending=self.archive_pending,
+                    detail_retention_seconds=DETAIL_RETENTION_SECONDS,
                     error=self.error)

@@ -57,6 +57,11 @@ def checksum(db):
 
 
 class StorageTests(unittest.TestCase):
+    def setUp(self):
+        clock = patch.object(storage.time, "time", return_value=100000)
+        clock.start()
+        self.addCleanup(clock.stop)
+
     def test_v2_migration_verifies_raw_values_and_rolls_back_on_mismatch(self):
         with sqlite3.connect(':memory:') as db:
             original_schema(db)
@@ -76,7 +81,7 @@ class StorageTests(unittest.TestCase):
             self.assertIsNone(db.execute("SELECT 1 FROM sqlite_master WHERE name='hourly_data_v3'").fetchone())
             storage.compact_schema(db)
             self.assertEqual(checksum(db), before)
-            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 3)
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 4)
             self.assertEqual(db.execute('SELECT COUNT(*) FROM traffic_hosts').fetchone()[0], 3)
             self.assertEqual(db.execute('PRAGMA foreign_key_check').fetchall(), [])
             for column, index in (('device_id','hourly_device_bucket'), ('host_id','hourly_host')):
@@ -499,6 +504,210 @@ class StorageTests(unittest.TestCase):
             policy.maintain()
             self.assertEqual(policy.error,'')
             db.close()
+
+
+class ArchiveTests(unittest.TestCase):
+    def setUp(self):
+        from pathlib import Path
+        from netify_classify import Classifier
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.path = self.directory.name+'/stats.db'
+        self.db = sqlite3.connect(self.path)
+        self.addCleanup(self.db.close)
+        original_schema(self.db)
+        storage.compact_schema(self.db)
+        self.policy = storage.StoragePolicy(self.db, self.path)
+        self.now = 2000000//3600*3600
+        self.cutoff = self.now-storage.DETAIL_RETENTION_SECONDS
+        self.classifier_factory = lambda: Classifier(Path(__file__).parent/'rules/community-rules.json')
+        factory = patch('netify_classify.Classifier', side_effect=self.classifier_factory)
+        factory.start()
+        self.addCleanup(factory.stop)
+        budget = patch.object(storage, 'MAINTENANCE_BUDGET_SECONDS', 10)
+        budget.start()
+        self.addCleanup(budget.stop)
+
+    def write(self, bucket, host='chatgpt.com', app='Unknown', mac='alice', protocol='TLS', up=10):
+        storage.record_hourly(self.db, (bucket,mac,'192.0.2.1',app,protocol,host,up,up*2,1))
+
+    def query(self, **filters):
+        from netify_query import aggregate
+        return aggregate(self.db, filters.pop('start',0), filters.pop('device',''), self.now,
+                         self.classifier_factory(), {}, {}, 1, 1, 'total', 'desc',
+                         ['community:openai', 'archive:domain', 'protocol:tls', 'netify.test'], **filters)
+
+    def drain(self):
+        self.db.commit()
+        for _ in range(100):
+            self.policy.archive(self.now)
+            if not self.policy.archive_pending:
+                break
+        self.assertFalse(self.policy.archive_pending)
+
+    def test_boundary_totals_frozen_classification_and_domain_removal(self):
+        for host, app, proto in [('chatgpt.com','Unknown','TLS'),
+                                  ('unmatched.example','Unknown','TLS'),
+                                  ('','Unknown','TLS'),
+                                  ('native.example','netify.test','QUIC')]:
+            self.write(self.cutoff-3600, host, app, protocol=proto)
+        self.write(self.cutoff)  # The boundary hour is still in Last 7 days.
+        self.write(self.now+3600, up=7)  # A clock correction must not compact the future.
+        before = self.query()
+        self.drain()
+        after = self.query()
+        self.assertEqual(after['total'],before['total'])
+        self.assertEqual(after['classification_coverage'],before['classification_coverage'])
+        self.assertEqual(after['archived_total'],dict(upload=40,download=80,flows=4))
+        self.assertEqual(sum(row['upload'] for row in after['timeline']),17)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM hourly_data').fetchone()[0],2)
+        self.assertEqual({r[0] for r in self.db.execute('SELECT application FROM traffic_archive')},
+                         {'community:openai','archive:domain','protocol:tls','netify.test'})
+        self.assertEqual(self.query(start=self.cutoff, end=self.now)['total']['upload'],10)
+        self.assertFalse(self.query(start=self.cutoff, end=self.now)['archive_included'])
+        self.assertEqual(self.query(search='unmatched.example')['total']['upload'],0)
+        self.assertEqual(self.query(application='archive:domain')['total']['upload'],10)
+        self.assertEqual(self.query(identification='domain')['total']['upload'],10)
+        openai = next(r for r in after['applications'] if r['id']=='community:openai')
+        self.assertEqual(sum(r['upload'] for r in openai['devices']),27)
+        self.assertEqual(sum(r['upload'] for r in openai['hosts']),17)
+        self.assertTrue(openai['has_archived_data'])
+        for _ in range(10):
+            if storage.prune_dimensions(self.db)['complete']:
+                break
+        self.assertEqual(self.db.execute('SELECT value FROM traffic_hosts').fetchall(), [('chatgpt.com',)])
+        self.assertEqual(self.db.execute('PRAGMA foreign_key_check').fetchall(), [])
+        self.db.commit()
+        self.policy.archive(self.now)
+        self.assertEqual(self.query()['total'],before['total'])
+
+    def test_batches_restart_new_old_deltas_and_dictionary_gc(self):
+        for i in range(520):
+            self.write(self.cutoff-7200,'host%d.example'%i,app='netify.test')
+        self.db.commit()
+        with patch.object(storage,'MAINTENANCE_BUDGET_SECONDS',0):
+            self.assertEqual(self.policy.archive(self.now),1)
+        self.assertTrue(self.policy.archive_pending)
+        self.assertEqual(self.policy.take_pruned_buckets(), ())
+        self.assertEqual(self.query()['total']['upload'],5200)
+        self.policy = storage.StoragePolicy(self.db,self.path)
+        self.drain()
+        self.assertEqual(self.policy.take_pruned_buckets(),{self.cutoff-7200})
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM traffic_archive').fetchone()[0],1)
+        for _ in range(10):
+            if storage.prune_dimensions(self.db)['complete']:
+                break
+        self.db.commit()
+        storage.compact_schema(self.db)  # Upgrade/restart must preserve archives.
+        self.assertEqual(self.query(device='alice')['total']['upload'],5200)
+        self.assertEqual(self.query(device='bob')['total']['upload'],0)
+        self.assertEqual(len(self.query()['device_choices']),1)
+        self.write(self.cutoff-7200,'late.example',app='netify.test',up=3)
+        self.drain()
+        self.assertEqual(self.query()['total']['upload'],5203)
+        self.assertEqual(self.db.execute('PRAGMA foreign_key_check').fetchall(), [])
+
+    def test_failed_move_rolls_back_both_counters_and_notification(self):
+        self.write(self.cutoff-3600)
+        self.db.commit()
+        self.db.execute("""CREATE TRIGGER fail_archive_delete BEFORE DELETE ON hourly_data
+                           BEGIN SELECT RAISE(ABORT,'simulated delete failure'); END""")
+        with self.assertRaisesRegex(sqlite3.IntegrityError,'simulated delete failure'):
+            self.policy.archive(self.now)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM traffic_archive').fetchone()[0],0)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM hourly_data').fetchone()[0],1)
+        self.assertEqual(self.policy.take_pruned_buckets(),())
+        self.db.execute('DROP TRIGGER fail_archive_delete')
+        self.drain()
+        self.assertEqual(self.query()['total']['upload'],10)
+
+    def test_interface_totals_and_baseline_survive_compaction(self):
+        accounting = InterfaceAccounting(self.db)
+        for t,down,up in [(self.cutoff-7200,10,20),(self.cutoff-3600,30,50),
+                          (self.cutoff,60,90)]:
+            accounting.record('wan','boot',down,up,t)
+        baseline = self.db.execute('SELECT * FROM interface_baseline').fetchall()
+        self.drain()
+        self.assertEqual(self.db.execute('SELECT download,upload FROM interface_archive').fetchone(),(20,30))
+        self.assertEqual(self.db.execute('SELECT SUM(download),SUM(upload) FROM interface_hourly').fetchone(),(30,40))
+        self.assertEqual(self.db.execute('SELECT * FROM interface_baseline').fetchall(),baseline)
+        import netify_rpc as rpc
+        with patch.object(rpc,'DB_PATH',self.path), patch.object(rpc.time,'time',return_value=self.now):
+            all_data = rpc.query_summary({})
+            recent = rpc.query_summary({'hours':168})
+        self.assertEqual(all_data['interfaces'][0]['download'],50)
+        self.assertEqual(recent['interfaces'][0]['download'],30)
+        self.policy.archive(self.now)
+        self.assertEqual(self.db.execute('SELECT download,upload FROM interface_archive').fetchone(),(20,30))
+
+    def test_archive_keeps_totals_after_repeated_domains_are_freed(self):
+        for hour in range(48):
+            for host in range(20):
+                self.write(self.cutoff-(hour+1)*3600,'service%d.example'%host,app='netify.test')
+        self.db.commit()
+        before_rows = self.db.execute('SELECT COUNT(*) FROM hourly_data').fetchone()[0]
+        self.drain()
+        self.assertEqual(before_rows,960)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM traffic_archive').fetchone()[0],1)
+        self.assertEqual(self.query()['total'],dict(upload=9600,download=19200,flows=960))
+
+    def test_explicit_capacity_can_evict_archive_before_recent_details(self):
+        self.write(self.cutoff-3600, app='netify.old')
+        self.write(self.now, app='netify.current')
+        self.drain()
+        self.db.execute('CREATE TABLE padding(value BLOB)')
+        self.db.execute('INSERT INTO padding VALUES (zeroblob(5000000))')
+        self.db.commit()
+        # Stop at the first archive deletion to inspect the eviction order.
+        real_prune = storage.prune_dimensions
+        def stop_after_archive(*args, **kwargs):
+            result = real_prune(*args, **kwargs)
+            if not self.db.execute('SELECT 1 FROM traffic_archive').fetchone():
+                result['complete'] = False
+            return result
+        with patch.object(storage.time,'time',return_value=self.now), \
+                patch.object(storage,'read_limit',return_value=4), \
+                patch.object(storage,'prune_dimensions',side_effect=stop_after_archive):
+            self.policy.maintain()
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM traffic_archive').fetchone()[0],0)
+        self.assertEqual(self.db.execute('SELECT upload FROM hourly_data').fetchone()[0],10)
+
+    def test_bad_rules_preserve_original_history(self):
+        self.write(self.cutoff-3600)
+        self.db.commit()
+        bad = self.classifier_factory()
+        bad.error = 'missing rules'
+        with patch('netify_classify.Classifier',return_value=bad):
+            with self.assertRaisesRegex(ValueError,'readable classification rules'):
+                self.policy.archive(self.now)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM hourly_data').fetchone()[0],1)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM traffic_archive').fetchone()[0],0)
+        self.drain()  # A repaired rules file must work without restarting.
+
+    def test_clock_rollback_does_not_assign_cumulative_bytes_to_recent_hours(self):
+        self.write(self.cutoff-3600)
+        self.drain()
+        self.assertIsNone(self.policy._archive_classifier)
+        import netify_rpc as rpc
+        with patch.object(rpc,'DB_PATH',self.path), patch.object(rpc.time,'time',return_value=self.cutoff-7200):
+            recent = rpc.query_summary({'hours':168})
+            all_data = rpc.query_summary({})
+        self.assertTrue(recent['clock_anomaly'])
+        self.assertEqual(recent['total']['upload'],0)
+        self.assertEqual(all_data['total']['upload'],10)
+        self.assertEqual(all_data['timeline'],[])
+
+    def test_active_proxy_guard_defers_archive_until_correction_finishes(self):
+        self.write(self.cutoff-7200)
+        self.write(self.cutoff-3600)
+        self.db.commit()
+        self.policy.archive_guard = lambda: self.cutoff-7200
+        self.policy.archive(self.now)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM hourly_data').fetchone()[0],2)
+        self.assertFalse(self.policy.archive_pending)
+        self.policy.archive_guard = lambda: None
+        self.drain()
+        self.assertEqual(self.query()['total']['upload'],20)
 
 
 if __name__ == '__main__':

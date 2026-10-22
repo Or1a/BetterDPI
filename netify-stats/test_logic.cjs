@@ -72,3 +72,18 @@ const view = new Function('view','rpc','dom','poll','L','E','_',source)(
  assert(!source.includes('点击一项，查看对应设备和访问目标'));
  console.log('Node logic: visible-page drilldown and removed subtitles OK');
 })().catch(e=>{console.error(e);process.exit(1);});
+
+// Compacted totals must never masquerade as dated trend/hostname records.
+for (const locale of ['en', 'zh-Hans', 'zh-Hant']) {
+ const data = {...base(),history_compacted:true,archive_included:true,
+  archived_total:{upload:1024,download:2048},
+  applications:[{id:'archive:domain',name:'Historical domain traffic',name_i18n:'Historical domain traffic',
+   source_type:'archived_domain',has_archived_data:true,upload:1024,download:2048,flows:1}], app_count:1};
+ const {root} = setup(data, {}, {locale});
+ assert(root.querySelector('.ns-archive-notice'));
+ assert(text(root.querySelector('.ns-archive-totals')).includes('2'));
+ assert(root.querySelector('.ns-archive-detail'));
+ const recent = setup({...data,hours:168,archive_included:false}, {}, {locale}).root;
+ assert(recent.querySelector('.ns-archive-notice'));
+ assert.equal(recent.querySelector('.ns-archive-totals'),null);
+}

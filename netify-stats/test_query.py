@@ -201,7 +201,7 @@ class QueryTest(unittest.TestCase):
             make_version_two(db)
             self.assertEqual(results(), original)
             compact_schema(db)
-            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 3)
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 4)
             self.assertIn('host_id', {row[1] for row in db.execute('PRAGMA table_info(hourly_data)')})
             self.assertEqual(results(), original)
             for result in original:

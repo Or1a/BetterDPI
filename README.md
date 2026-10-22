@@ -4,6 +4,8 @@ BetterDPI is a LuCI plugin for local traffic analysis on OpenWrt, using Netify t
 
 BetterDPI 是用于 OpenWrt 的本地流量分析 LuCI 插件，通过 Netify 识别设备、应用和网站流量。
 
+当前源码新增了 **7 天明细 + 更早数据累计**：旧数据保留设备、应用和协议的数字统计，删除域名及小时明细，不按天存储，继续使用 `/tmp`。这项改动尚未进入下方 V0.3.0 发布包。
+
 ## Features
 
 - Analyze traffic by device, application, and website in LuCI, with paginated rankings and drill-down views.
