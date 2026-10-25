@@ -178,3 +178,13 @@
 - 不新增独立采集服务，不联网探测。若用户需要额外启用 Netify WAN 抓包，须分别测量其成本，不能把它包含在 Python 记账微基准里。
 
 - 最终源码验证：165 项 Python 全量回归、8 组 Node 界面逻辑检查、迟到代理复现、23 个运行文件/10 个内部模块的打包检查均通过。补充验证 WAN 归属扫描超时不影响已有 LAN REDIRECT 归属；发布包由本次标签的官方 SDK 流水线生成。
+
+### V0.3.2 发布附件验证
+
+- 标签提交：`25f793a467672dd15824754abb17cdaa206d2e73`。
+- [GitHub Actions #12](https://github.com/Or1a/BetterDPI/actions/runs/40209268510) 全部成功；[V0.3.2 Release](https://github.com/Or1a/BetterDPI/releases/tag/V0.3.2) 已发布 6 个附件。
+- IPK：244,930 字节，SHA-256 `a96752bf78934fc43f8d55257a926c2cdc2d627ade00af0f711f06d2b3e1d591`。
+- APK：243,060 字节，SHA-256 `eaa2433bf0b7c24d6adfe8cf3cd8bf5247fc595e732af92e79c80e38ea17a41d`。
+- 六个附件已实际下载，`SHA256SUMS`、更新清单、版本包与固定名称包核对一致；两包全部 23 个运行文件的内容和权限与标签源码一致。两包内部版本均为 `0.3.2-r1`，IPK 为 `all`，APK 为 `noarch`。APK 仅额外包含 SDK 生成的包文件清单，没有用户配置、统计库或密钥。
+- IPK 安装/卸载包装器和 APK 安装、卸载、升级钩子均已检查。使用与 OpenWrt 25.12 相同上游提交的 apk-tools 3.0.5 解包，未在云机器安装路由器应用或执行其安装钩子。
+- `releases/latest/download` 的两份固定名称包和 `update.json` 已逐字节核对指向 V0.3.2；直接载入 V0.3.0、V0.3.1 标签的更新器代码，两种 OpenWrt 系列均通过新版清单校验与版本递增检查。上述验证不代替真实路由器安装、升级及新旧采集口径对照。
