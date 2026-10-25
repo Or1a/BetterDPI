@@ -31,7 +31,8 @@ PROTOCOL_ALIASES = {
     'stun': ('stun',),
     'bittorrent': ('bittorrent', 'bittorrent dht', 'bittorrent_dht'),
     'ssh': ('ssh',),
-    'vpn': ('openvpn', 'wireguard', 'ipsec', 'ipsec ike', 'ipsec esp'),
+    'vpn': ('openvpn', 'wireguard', 'ipsec', 'ipsec ike', 'ipsec esp',
+            'ipsec ah', 'ike', 'ikev1', 'ikev2', 'esp', 'pptp', 'l2tp', 'sstp'),
     'tcp': ('tcp',),
     'udp': ('udp',),
 }
@@ -103,6 +104,11 @@ class Classifier:
         self._classify_domain = lru_cache(maxsize=32768)(self._classify_domain)
 
     def classify(self, native, host, protocol=''):
+        # The endpoint domain/provider is not the traffic's inner destination.
+        # Only an explicitly observed VPN protocol takes this path, never a
+        # port number, interface name, TLS, QUIC, or a bandwidth discrepancy.
+        if isinstance(protocol, str) and len(protocol) <= 128 and PROTOCOL_LOOKUP.get(protocol.strip().casefold()) == 'vpn':
+            return self._unresolved('vpn_tunnel', protocol)
         if native not in ('Unknown', 'Unclassified', '', None) and isinstance(native, str) and native.strip().lower() not in ('', 'unknown', 'unclassified'):
             return native
         if host is not None and host == self._last_raw_host:

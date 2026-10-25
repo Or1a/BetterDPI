@@ -114,9 +114,9 @@ class QueryTest(unittest.TestCase):
                         self.assertTrue(recent['clock_anomaly'])
                         self.assertTrue(all_data['clock_warning'])
                         self.assertEqual(all_data['total']['download'], 120)
-                        self.assertEqual(recent['total']['download'], 60)
+                        self.assertEqual(recent['total']['download'], 40)
                         self.assertEqual(all_data['interfaces'][0]['download'], 1200)
-                        self.assertEqual(recent['interfaces'][0]['download'], 600)
+                        self.assertEqual(recent['interfaces'][0]['download'], 400)
                         self.assertEqual(all_data['range_end'], 10800)
                         self.assertEqual(recent['range_end'], 7201)
                         for result in (all_data, recent):
@@ -201,7 +201,7 @@ class QueryTest(unittest.TestCase):
             make_version_two(db)
             self.assertEqual(results(), original)
             compact_schema(db)
-            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 4)
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 5)
             self.assertIn('host_id', {row[1] for row in db.execute('PRAGMA table_info(hourly_data)')})
             self.assertEqual(results(), original)
             for result in original:

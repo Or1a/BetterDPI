@@ -18,7 +18,7 @@ https://github.com/Or1a/BetterDPI/releases/latest/download/BetterDPI-openwrt-24.
 https://github.com/Or1a/BetterDPI/releases/latest/download/BetterDPI-openwrt-25.12-all.apk
 ```
 
-**当前版本为 [V0.3.1](https://github.com/Or1a/BetterDPI/releases/tag/V0.3.1)，上述固定地址与应用内更新清单已核对指向新版。** 确定版本的下载地址与校验和见 [README](README.md#command-line-download)。
+**当前版本为 [V0.3.2](https://github.com/Or1a/BetterDPI/releases/tag/V0.3.2)，发布流程会同步更新上述固定地址与应用内更新清单。** 确定版本的下载地址与校验和见 [README](README.md#command-line-download)。
 
 OpenWrt 24.10 可以直接运行：
 
@@ -58,7 +58,7 @@ opkg update && opkg install 'https://github.com/Or1a/BetterDPI/releases/latest/d
 
 ## 已安装旧版的机器如何升级
 
-V0.3.0 可直接在“应用更新”检查并升级到 V0.3.1。更早的旧版页面没有更新入口，先用上面的下载、校验、安装命令覆盖安装一次。继续安装同一个包 `luci-app-netify-stats` 即可，不需要先卸载，也不需要重启路由器。OpenWrt 24.10 使用 IPK，25.12 使用 APK；这只升级插件，不会升级 OpenWrt 系统本身。
+V0.3.0 / V0.3.1 可直接在“应用更新”检查并升级到 V0.3.2。更早的旧版页面没有更新入口，先用上面的下载、校验、安装命令覆盖安装一次。继续安装同一个包 `luci-app-netify-stats` 即可，不需要先卸载，也不需要重启路由器。OpenWrt 24.10 使用 IPK，25.12 使用 APK；这只升级插件，不会升级 OpenWrt 系统本身。
 
 V0.3.1 会把超过 7 天的明细逐步合并为累计统计，保留数字但删除旧域名和小时细节。
 
@@ -75,3 +75,5 @@ V0.3.1 会把超过 7 天的明细逐步合并为累计统计，保留数字但�
 应用内的 APK 安装禁止包管理器联网，只安装已下载并校验的本地包。若未来版本新增了机器上没有的依赖，请先通过系统的正常软件源补齐依赖，或按上面的手动步骤升级；更新器不会自动放宽全局签名策略或升级整个系统。
 
 命令兼容性依据：[OpenWrt opkg URL 处理](https://github.com/openwrt/opkg-lede/blob/38eccbb1fd694d4798ac1baf88f9ba83d1eac616/libopkg/opkg_download.c#L316)、[OpenWrt 25.12.5 的 apk 版本](https://github.com/openwrt/openwrt/blob/v25.12.5/package/system/apk/Makefile)、[对应 apk add 的本地文件处理](https://github.com/alpinelinux/apk-tools/blob/b5a31c0d865342ad80be10d68f1bb3d3ad9b0866/src/app_add.c)。
+
+V0.3.2 的 WAN 独立账从升级后收到的外部接口增量开始，不会把既往接口差额补入设备统计。若页面没有 WAN 记录，先确认 Netify 已监听真实外部接口，详见 [WAN/VPN 说明](netify-stats/README.md#wan--vpn-独立计量v032)。

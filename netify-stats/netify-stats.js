@@ -77,7 +77,7 @@ function displayDate(date) {
 	// LuCI resolves its configured language (including Auto) into the page lang.
 	// Use that locale, not an unrelated browser language, for date formatting.
 	var locale = (document.documentElement && document.documentElement.lang || 'en').replace(/_/g, '-');
-	return date.toLocaleString(locale);
+	return date.toLocaleString(locale, { timeZoneName: 'short' });
 }
 
 function applicationName(item) {
@@ -127,6 +127,7 @@ function classificationDetails(item) {
 	var explanations = {
 		native: _("Netify identified this application directly."),
 		protocol: _("Only the protocol is identified; the application remains unknown."),
+		vpn_tunnel: _("A VPN protocol was observed. Its endpoint does not identify the traffic inside the tunnel."),
 		community: _("A community domain rule supplied this classification."),
 		infrastructure: _("The domain identifies a shared hosting or CDN provider, not a specific application."),
 		ambiguous: _("The matching rule names multiple applications; no application was selected."),
@@ -261,6 +262,78 @@ function collectionDiagnostics(data, opened, toggle) {
 	]);
 }
 
+function signedBytes(value) {
+	return (value < 0 ? '−' : '+') + bytes(Math.abs(value));
+}
+
+function wanCategory(category) {
+	var labels = {forwarded: _("Device forwarding"), proxy: _("Proxy process"),
+		tunnel: _("VPN / tunnel"), router: _("Router process"), unattributed: _("Ownership unconfirmed")};
+	return labels[category] || labels.unattributed;
+}
+
+function wanEvidence(value) {
+	if (String(value).indexOf('socket:') === 0) return _("Exact socket owner: %s").format(esc(value.slice(7)));
+	var labels = {conntrack_lan_tuple: _("Conntrack tuple matched an observed LAN device"),
+		observed_vpn_protocol: _("Explicit VPN protocol"), missing_metadata: _("Metadata unavailable"),
+		direction_unconfirmed: _("Direction unconfirmed"), ownership_unconfirmed: _("No reliable ownership evidence")};
+	return labels[value] || labels.ownership_unconfirmed;
+}
+
+function wanPanel(data) {
+	var rows = data.wan_interfaces || [], status = data.collector && data.collector.wan || {};
+	return E('details', { 'class': 'ns-section ns-wan-accounting' }, [
+		E('summary', {}, _("WAN evidence ledger")),
+		E('p', {}, _("WAN observations are independent of device totals. They are never added to device traffic or tunnel counters. Interfaces are shown separately.")),
+		E('p', {}, _("Residual = interface counter minus WAN observation over the selected hour buckets. It may be negative; it is not VPN traffic or blocked traffic. Different start times, capture gaps and reporting delays remain unresolved.")),
+		status.attribution_error ? E('p', { 'role': 'alert' }, _("WAN ownership lookup is incomplete: %s").format(esc(status.attribution_error))) : E('span'),
+		E('p', { 'class': 'ns-range' }, _("This collection session: %s duplicate events rejected; %s counter regressions; %s overlapping events rejected; %s events without cumulative counters omitted; %s bytes missing between cumulative reports.").format(
+			status.duplicates || 0, status.counter_regressions || 0, status.overlapping_events || 0,
+			status.no_cumulative_events || 0, bytes(status.missing_delta_bytes))),
+		status.cursor_evictions || status.metadata_evictions ? E('p', {}, _("Tracking capacity was reached. Metadata may be incomplete; identities whose duplicate guards were evicted are omitted instead of counted again.")) : E('span'),
+		status.stale_events || status.clock_events ? E('p', {}, _("Events omitted due to old or invalid capture timestamps: %s.").format((status.stale_events || 0) + (status.clock_events || 0))) : E('span'),
+		status.delayed_events ? E('p', {}, _("WAN reports delayed over 30 seconds: %s; maximum observed delay: %s seconds. Buckets use arrival time, without redistributing bytes.").format(status.delayed_events, status.max_report_delay_seconds || 0)) : E('span'),
+		status.capacity_omitted_events ? E('p', {}, _("Events omitted to preserve duplicate protection: %s.").format(status.capacity_omitted_events)) : E('span'),
+		rows.length ? E('div', {}, rows.map(function(row) {
+			var hours = (row.hours || []).slice(-24);
+			return E('section', { 'class': 'ns-wan-interface' }, [
+				E('h4', {}, row.name),
+				E('p', {}, _("Observed local-side sent: %s; remote-side sent: %s.").format(bytes(row.upload), bytes(row.download))),
+				row.direction_unconfirmed_bytes ? E('p', {}, _("Some WAN byte directions are unconfirmed; interface residuals are not calculated for this range.")) : E('span'),
+				row.residual ? E('p', { 'class': 'ns-wan-residual' }, _("Signed residual — TX: %s; RX: %s.").format(signedBytes(row.residual.upload), signedBytes(row.residual.download))) : E('p', {}, _("No matching kernel interface counter is available for this range.")),
+				E('table', {}, [E('tr', {}, [E('th', {}, _("Category")), E('th', {}, _("Local-side sent")), E('th', {}, _("Remote-side sent"))])].concat(
+					['forwarded','proxy','tunnel','router','unattributed'].map(function(key) {
+						var item = row.categories && row.categories[key] || {};
+						return E('tr', {}, [E('td', {}, wanCategory(key)), E('td', {}, bytes(item.upload)), E('td', {}, bytes(item.download))]);
+					}))),
+				row.archived ? E('p', {}, _("Includes compacted WAN totals; old endpoint and hourly details are unavailable.")) : E('span'),
+				E('details', {}, [E('summary', {}, _("Top endpoint evidence samples")), E('div', {}, (row.details || []).map(function(item) {
+					return E('p', {}, [esc(item.peer || '—') + ' · ' + wanCategory(item.category) + ' · ' + wanEvidence(item.evidence),
+						' · ' + bytes(item.upload) + ' / ' + bytes(item.download),
+						item.device ? ' · ' + _("Associated device: %s").format(esc(item.device)) : '']);
+				}))]),
+				E('details', {}, [E('summary', {}, _("Latest 24 recorded hour buckets")),
+					E('table', {}, [E('tr', {}, [E('th', {}, _("Hour start")), E('th', {}, _("Local-side sent")), E('th', {}, _("Remote-side sent")), E('th', {}, _("TX residual")), E('th', {}, _("RX residual"))])].concat(hours.map(function(hour) {
+						return E('tr', {}, [E('td', {}, displayDate(new Date(hour.bucket*1000))), E('td', {}, bytes(hour.upload)), E('td', {}, bytes(hour.download)),
+							E('td', {}, hour.residual_upload == null ? '—' : signedBytes(hour.residual_upload)), E('td', {}, hour.residual_download == null ? '—' : signedBytes(hour.residual_download))]);
+					})))])
+			]);
+		})) : E('p', {}, _("No WAN deltas were recorded. Netify must monitor an external interface; old gaps are not reconstructed."))
+	]);
+}
+
+function tunnelPanel(data) {
+	var rows = data.tunnels || [], collector = data.collector || {};
+	return E('details', { 'class': 'ns-section ns-tunnel-accounting' }, [
+		E('summary', {}, _("Tunnel interface counters")),
+		E('p', {}, _("Kernel counters for detected tunnel interfaces, including WireGuard and TUN/TAP. These may overlap each other, LAN and WAN observations; do not add them together. Generic tunnels do not prove VPN usage.")),
+		collector.tunnel_error ? E('p', { 'role': 'alert' }, _("Tunnel metering is incomplete: %s").format(esc(collector.tunnel_error))) : E('span'),
+		rows.length ? E('div', {}, rows.map(function(row) {
+			return E('p', {}, esc(row.name) + ' (' + esc(row.kind) + ') · ' + _("Receive RX") + ': ' + bytes(row.download) + ' · ' + _("Transmit TX") + ': ' + bytes(row.upload));
+		})) : E('p', {}, _("No tunnel samples yet. Proxies without a separate tunnel interface cannot be measured by this counter."))
+	]);
+}
+
 function errorMessage(value) {
 	var message = esc(value), prefix = 'Analysis setting could not be fully applied: ';
 	if (message.indexOf(prefix) === 0)
@@ -342,7 +415,7 @@ function applicationRows(items, page, expanded, refresh, focus, filtered) {
 		var hosts = sorted((item.hosts || []).filter(function(host) { return host.name && host.name.toLowerCase() !== 'unknown'; }), 'total', 'desc').slice(0,5);
 		var detail = E('div', { 'class': 'ns-app-detail', 'style': expanded.has(item.id) ? 'display:block' : 'display:none' }, E('div', { 'class': 'ns-detail-grid' }, [
 			E('section', {}, [ E('h4', {}, _("Devices generating this traffic")), miniRows(item.devices, 'name', item.id + ':devices') ]),
-			E('section', {}, [ E('h4', {}, _("Websites / services")), miniRows(hosts, 'name', item.id + ':hosts') ]),
+			E('section', {}, [ E('h4', {}, item.id === 'protocol:vpn' ? _("VPN endpoints (not inner destinations)") : _("Websites / services")), miniRows(hosts, 'name', item.id + ':hosts') ]),
 			classificationDetails(item),
 			E('button', { 'type': 'button', 'class': 'btn cbi-button ns-focus-application', 'click': function() { return focus(item); } }, _("View devices and trend for this traffic"))
 		]));
@@ -626,9 +699,13 @@ return view.extend({
 			E('div', { 'class': 'ns-stats' }, [
 				stat(_("Device download"), bytes(total.download), _("Internet → device"), 'download'), stat(_("Device upload"), bytes(total.upload), _("Device → Internet"), 'upload')
 			]),
+			data.vpn_total && (data.vpn_total.upload || data.vpn_total.download) ? E('p', { 'class': 'ns-device-vpn' }, _("Device VPN subset — upload: %s; download: %s. Already included in device totals; inner destinations remain unknown.").format(bytes(data.vpn_total.upload), bytes(data.vpn_total.download))) : E('span'),
+			data.hours && data.range_start != null ? E('p', { 'class': 'ns-hour-window' }, _("Actual window: %s to %s. The selected number of hour buckets includes the unfinished current hour; this is not an exact rolling window.").format(displayDate(new Date(data.range_start*1000)), displayDate(new Date(data.range_end*1000)))) : E('span'),
 			classificationCoverage(data),
 			collectionDiagnostics(data, this.diagnosticsExpanded, L.bind(function(ev) { this.diagnosticsExpanded = ev.currentTarget.open; }, this)),
 			!data.device && !filtered ? this.interfacePanel(data) : E('span'),
+			!data.device && !filtered ? wanPanel(data) : E('span'),
+			!data.device && !filtered ? tunnelPanel(data) : E('span'),
 			E('section', { 'class': 'ns-section ns-apps' }, [
 				E('div', { 'class': 'ns-section-head' }, [ E('h3', {}, _("Application and website ranking")), E('div', { 'class': 'ns-legend' }, [ E('span', { 'class': 'download' }, _("Download")), E('span', { 'class': 'upload' }, _("Upload")) ]) ]),
 				applicationRows(applications, this.appPage, this.expandedApps, L.bind(this.refresh, this), L.bind(this.focusApplication, this), filtered),
@@ -799,6 +876,7 @@ return view.extend({
 .ns-root .ns-values small, .ns-root .ns-time-col small { font-size:11px; }
 .ns-root .ns-detail-grid { grid-template-columns:minmax(0,1fr); }
 .ns-root .ns-detail-grid section>div { max-height:360px; overflow-y:auto; }
+.ns-root .ns-wan-interface { overflow-x:auto; }
 .ns-root .ns-range { font-size:12px; opacity:.8; }
 .ns-root .ns-classification, .ns-root .ns-evidence { overflow-wrap:anywhere; }
 .ns-root .ns-evidence+.ns-evidence { border-top:1px solid rgba(127,127,127,.16); margin-top:8px; }
@@ -863,7 +941,7 @@ return view.extend({
 `));
 		var rerender = L.bind(function() { this.expandedApps.clear(); this.appPage = 1; this.devicePage = 1; this.refresh(); }, this);
 		var controls = E('div', { 'class': 'ns-toolbar' }, [
-			E('div', { 'class': 'ns-field' }, [ E('label', {}, _("Time range")), E('select', { 'id': 'ns-hours', 'change': L.bind(function() { return this.changeFilters(); }, this) }, [ E('option', { 'value': '0', 'selected': '' }, _("All")), E('option', { 'value': '1' }, _("Last 1 hour")), E('option', { 'value': '5' }, _("Last 5 hours")), E('option', { 'value': '24' }, _("Last 24 hours")), E('option', { 'value': '168' }, _("Last 7 days")) ]) ]),
+			E('div', { 'class': 'ns-field' }, [ E('label', {}, _("Time range")), E('select', { 'id': 'ns-hours', 'change': L.bind(function() { return this.changeFilters(); }, this) }, [ E('option', { 'value': '0', 'selected': '' }, _("All")), E('option', { 'value': '1' }, _("Current hour")), E('option', { 'value': '5' }, _("Last 5 hours")), E('option', { 'value': '24' }, _("Last 24 hours")), E('option', { 'value': '168' }, _("Last 7 days")) ]) ]),
 			E('div', { 'class': 'ns-field' }, [ E('label', {}, _("Device")), E('select', { 'id': 'ns-device', 'change': L.bind(function() { return this.changeFilters(); }, this) }, [ E('option', { 'value': '' }, _("All devices")) ]) ]),
 			E('div', { 'class': 'ns-field' }, [ E('label', { 'for': 'ns-device-search' }, _("Find a device")), E('input', { 'id': 'ns-device-search', 'type': 'search', 'maxlength': '128', 'placeholder': _("Name, MAC or IP address"), 'input': L.bind(function() { this.updateDeviceChoices(this.currentData); }, this) }) ]),
 			E('div', { 'class': 'ns-field' }, [ E('label', { 'for': 'ns-identification' }, _("Identification level")), E('select', { 'id': 'ns-identification', 'change': L.bind(function() { return this.changeFilters(true); }, this) }, [

@@ -803,3 +803,138 @@ msgstr "达到容量上限时，先删除旧累计条目，再删除小时明细
 
 msgid "Details are kept for 7 days, then compacted into cumulative device, application and protocol totals. 0 means unlimited. At the limit, old cumulative entries are removed before hourly details. Writes may temporarily exceed the limit. Records stay in /tmp and are cleared on reboot; the capacity setting is kept."
 msgstr "保留最近 7 天明细，之后压缩为设备、应用和协议的累计统计。0 表示不限容量。达到上限时先删除旧累计条目，再删除小时明细。写入可能暂时超出上限。记录仍保存在 /tmp，重启后清空；容量设置会保留。"
+
+msgid "A VPN protocol was observed. Its endpoint does not identify the traffic inside the tunnel."
+msgstr "已观察到 VPN 协议。隧道端点不能说明隧道内流量的最终应用。"
+
+msgid "Device forwarding"
+msgstr "设备转发"
+
+msgid "Proxy process"
+msgstr "代理进程"
+
+msgid "VPN / tunnel"
+msgstr "VPN／隧道"
+
+msgid "Router process"
+msgstr "路由器进程"
+
+msgid "Ownership unconfirmed"
+msgstr "暂时无法归属"
+
+msgid "Exact socket owner: %s"
+msgstr "套接字精确匹配进程：%s"
+
+msgid "Conntrack tuple matched an observed LAN device"
+msgstr "连接跟踪元组匹配已观察到的 LAN 设备"
+
+msgid "Explicit VPN protocol"
+msgstr "明确的 VPN 协议"
+
+msgid "Metadata unavailable"
+msgstr "元数据缺失"
+
+msgid "Direction unconfirmed"
+msgstr "方向待确认"
+
+msgid "No reliable ownership evidence"
+msgstr "缺少可靠归属依据"
+
+msgid "WAN evidence ledger"
+msgstr "WAN 独立流量账"
+
+msgid "WAN observations are independent of device totals. They are never added to device traffic or tunnel counters. Interfaces are shown separately."
+msgstr "WAN 观测与设备总量独立记账，不叠加到设备流量或隧道计数中。各接口分别显示。"
+
+msgid "Residual = interface counter minus WAN observation over the selected hour buckets. It may be negative; it is not VPN traffic or blocked traffic. Different start times, capture gaps and reporting delays remain unresolved."
+msgstr "差额 = 所选小时桶内接口计数减去 WAN 观测量，可为负数，不等于 VPN 流量或拦截量。统计起点不同、漏采和上报延迟仍可能造成差异。"
+
+msgid "WAN ownership lookup is incomplete: %s"
+msgstr "WAN 归属查询不完整：%s"
+
+msgid "This collection session: %s duplicate events rejected; %s counter regressions; %s overlapping events rejected; %s events without cumulative counters omitted; %s bytes missing between cumulative reports."
+msgstr "本次采集会话：已拒绝 %s 个重复事件；%s 次累计计数倒退；已拒绝 %s 个重叠事件；跳过 %s 个缺少累计计数的事件；累计报告之间有 %s 字节缺失。"
+
+msgid "Tracking capacity was reached. Some metadata or duplicate guards were evicted; attribution and replay coverage may be incomplete."
+msgstr "跟踪容量已达上限，部分元数据或重复保护记录已淘汰，归属和重放检查可能不完整。"
+
+msgid "Observed local-side sent: %s; remote-side sent: %s."
+msgstr "观测到本地端发送：%s；对端发送：%s。"
+
+msgid "Signed residual — TX: %s; RX: %s."
+msgstr "带符号差额 — TX：%s；RX：%s。"
+
+msgid "No matching kernel interface counter is available for this range."
+msgstr "此范围没有同名接口的内核计数可供比较。"
+
+msgid "Category"
+msgstr "分类"
+
+msgid "Local-side sent"
+msgstr "本地端发送"
+
+msgid "Remote-side sent"
+msgstr "对端发送"
+
+msgid "Includes compacted WAN totals; old endpoint and hourly details are unavailable."
+msgstr "包含已压缩的 WAN 累计量，旧端点和小时明细已不保留。"
+
+msgid "Top endpoint evidence samples"
+msgstr "流量较大的端点依据样本"
+
+msgid "Associated device: %s"
+msgstr "关联设备：%s"
+
+msgid "Latest 24 recorded hour buckets"
+msgstr "最近 24 个有记录的小时桶"
+
+msgid "Hour start"
+msgstr "小时起点"
+
+msgid "TX residual"
+msgstr "TX 差额"
+
+msgid "RX residual"
+msgstr "RX 差额"
+
+msgid "No WAN deltas were recorded. Netify must monitor an external interface; old gaps are not reconstructed."
+msgstr "尚无 WAN 增量记录。Netify 需监听外部接口；不会补造此前的缺口。"
+
+msgid "Tunnel interface counters"
+msgstr "隧道接口计数"
+
+msgid "Kernel counters for detected tunnel interfaces, including WireGuard and TUN/TAP. These may overlap each other, LAN and WAN observations; do not add them together. Generic tunnels do not prove VPN usage."
+msgstr "读取已检测到的隧道接口内核计数，包括 WireGuard 和 TUN/TAP。它们彼此之间及与 LAN、WAN 观测可能重叠，不应相加；通用隧道不代表一定使用 VPN。"
+
+msgid "Tunnel metering is incomplete: %s"
+msgstr "隧道计量不完整：%s"
+
+msgid "No tunnel samples yet. Proxies without a separate tunnel interface cannot be measured by this counter."
+msgstr "尚无隧道计量样本；没有独立隧道接口的代理无法通过此计数器测量。"
+
+msgid "Device VPN subset — upload: %s; download: %s. Already included in device totals; inner destinations remain unknown."
+msgstr "设备侧 VPN 子集 — 上传：%s；下载：%s。已包含在设备总量中，隧道内最终去向仍未知。"
+
+msgid "Actual window: %s to %s. The selected number of hour buckets includes the unfinished current hour; this is not an exact rolling window."
+msgstr "实际范围：%s 至 %s。所选小时桶数量包含尚未结束的当前小时，并非精确滚动时间窗口。"
+
+msgid "Current hour"
+msgstr "当前小时"
+
+msgid "Tracking capacity was reached. Metadata may be incomplete; identities whose duplicate guards were evicted are omitted instead of counted again."
+msgstr "跟踪容量已达上限，元数据可能不完整；重复保护记录被淘汰的连接会停止入账，不会再当成新连接计数。"
+
+msgid "Some WAN byte directions are unconfirmed; interface residuals are not calculated for this range."
+msgstr "部分 WAN 字节方向待确认，暂不计算此范围的接口差额。"
+
+msgid "Events omitted to preserve duplicate protection: %s."
+msgstr "为保留重复保护而跳过的事件数：%s。"
+
+msgid "Events omitted due to old or invalid capture timestamps: %s."
+msgstr "因采集时间戳过旧或无效而跳过的事件数：%s。"
+
+msgid "WAN reports delayed over 30 seconds: %s; maximum observed delay: %s seconds. Buckets use arrival time, without redistributing bytes."
+msgstr "WAN 报告延迟超过 30 秒的事件：%s；观察到的最大延迟：%s 秒。按到达时间入桶，不重新分摊字节。"
+
+msgid "VPN endpoints (not inner destinations)"
+msgstr "VPN 端点（不是隧道内最终去向）"

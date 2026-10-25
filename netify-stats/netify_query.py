@@ -2,7 +2,7 @@
 from copy import copy
 from heapq import nsmallest
 
-from netify_classify import APP_NAME_MSGIDS
+from netify_classify import APP_NAME_MSGIDS, PROTOCOL_LOOKUP
 
 
 # Search the small set of names translated by the built-in UI without loading
@@ -223,13 +223,19 @@ def _aggregate(db, start, device, now, classifier, names, latest_ips,
         if device:
             archive_where = ' WHERE device_id IN (SELECT id FROM traffic_devices WHERE mac=? OR ip=?)'
             archive_args = [device, device]
-        for key, app, upload, download, flows in db.execute(
-                'SELECT device_id,application,SUM(upload),SUM(download),SUM(flows) '
-                'FROM traffic_archive'+archive_where+' GROUP BY device_id,application', archive_args):
+        for key, app, protocol_key, upload, download, flows in db.execute(
+                'SELECT device_id,application,protocol_id,SUM(upload),SUM(download),SUM(flows) '
+                'FROM traffic_archive'+archive_where+' GROUP BY device_id,application,protocol_id', archive_args):
+            archived_protocol = protocol_labels[protocol_key]
+            archived_vpn = PROTOCOL_LOOKUP.get(archived_protocol.strip().casefold()) == 'vpn'
+            if archived_vpn:
+                app = 'protocol:vpn'
             # These are frozen classification IDs, not raw native app names.
             # Domain samples were removed, so only the retained labels match.
             if filtered and not matches(app, ''):
                 continue
+            if archived_vpn:
+                classifier.classify('Unknown', None, archived_protocol)
             if app not in apps:
                 apps[app] = _counts(id=app, identification_level=classifier.identification_level(app))
             _add(apps[app], upload, download, flows)
@@ -338,6 +344,7 @@ def _aggregate(db, start, device, now, classifier, names, latest_ips,
         choices.append({'mac': mac, 'ip': ip, 'name': names.get(mac, names.get(ip, mac))})
     return {'total':total,'classification_coverage':coverage,
             'archived_total':archived_total,
+            'vpn_total':{key:apps.get('protocol:vpn', {}).get(key, 0) for key in ('upload','download','flows')},
             'history_compacted':bool(has_archive and db.execute('SELECT 1 FROM traffic_archive LIMIT 1').fetchone()),
             'archive_included':bool(include_archive and any(archived_total.values())),
             'app_count':len(apps),'device_count':len(devices),

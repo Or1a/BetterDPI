@@ -15,6 +15,7 @@ sys.path.insert(0, '/usr/lib/netify-stats')
 from netify_accounting import InterfaceAccounting
 from netify_storage import compact_schema, correct_hourly, HourlyWriter, StoragePolicy
 from netify_proxy import RedirectMap
+from netify_wan import WanAccounting
 
 
 SOCKET_PATH = "/var/run/netifyd/netifyd.sock"
@@ -26,7 +27,7 @@ EXPORT_PATH = '/var/run/netifyd/sink-request.json'
 PENDING_LIMIT = 4096
 PENDING_TTL = 60
 HOST_PATTERN = re.compile(r'[a-z0-9_-]+(?:\.[a-z0-9_-]+)+', re.I)
-TRANSPORT_NAMES = {6: 'TCP', 17: 'UDP'}
+TRANSPORT_NAMES = {6: 'TCP', 17: 'UDP', 50: 'IPsec ESP', 51: 'IPsec AH'}
 
 
 def host_rank(value):
@@ -82,6 +83,7 @@ class Collector:
             PRIMARY KEY(bucket,interface,kind,identity)) WITHOUT ROWID''')
         self.db.execute('PRAGMA temp.cache_size=-256')
         self.storage = StoragePolicy(self.db, DB_PATH, self.archive_guard)
+        self.wan = WanAccounting(self.db, self.proxy)
         self.excluded = set()
         # Global arrival order handles bounded retention; per-flow indexes let
         # recovery touch only that flow's events, not every other queued event.
@@ -169,6 +171,7 @@ class Collector:
 
     def update_metadata(self, message):
         if message.get('internal') is False:
+            self.wan.update_metadata(message)
             return
         digest, metadata = self.normalize_metadata(message)
         if not digest:
@@ -212,6 +215,8 @@ class Collector:
             elif key not in old:
                 old[key] = value
         self.flows[digest] = old
+        if self.proxy.want_egress:
+            self.proxy.observe_client(old['ip'], old['mac'])
         probe = old.get('proxy_probe')
         if probe and all(probe.get(key) is not None for key in (
                 'ip_protocol', 'local_ip', 'local_port', 'other_ip', 'other_port')):
@@ -342,6 +347,7 @@ class Collector:
         self.sync_retention()
         flow = message.get("flow") or {}
         if message.get('internal') is False:
+            self.wan.add_stats(message, received_at)
             return
         digest = (message.get('interface', ''), flow.get("digest"))
         meta = self.flows.get(digest)
@@ -391,6 +397,8 @@ class Collector:
                 download = 0
             self.proxy_upload += upload
             self.proxy_download += download
+        if self.proxy.want_egress:
+            self.proxy.observe_client(meta['ip'], meta['mac'])
         if retry:
             self.recovered_stats += 1
         self.db.execute('''INSERT INTO device_latest VALUES (?,?,?) ON CONFLICT(mac)
@@ -505,7 +513,10 @@ class Collector:
             "unattributed_upload": self.unattributed_upload,
             "unattributed_download": self.unattributed_download,
             "export_error": self.export_error,
+            "wan": dict(self.wan.stats, attribution_error=self.proxy.egress_error),
             "interface_error": self.accounting.error,
+            "tunnel_error": self.accounting.tunnel_error or getattr(self.accounting, 'tunnel_sample_error', ''),
+            "tunnel_interfaces": [{'name': name, 'kind': values[0]} for name, values in sorted(self.accounting.tunnels.items())],
             "proxy_error": self.proxy.error,
             "proxy_upload": self.proxy_upload,
             "proxy_download": self.proxy_download,
@@ -529,6 +540,8 @@ class Collector:
         if now_mono - self.last_commit >= 3:
             self.expire_original_candidates()
             self.recover_metadata()
+            if self.proxy.want_egress and now_mono-self.proxy.egress_updated >= 30:
+                self.proxy.refresh()
             self.accounting.sample(int(time.time()))
             self.db.commit()
             try:

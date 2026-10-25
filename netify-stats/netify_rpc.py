@@ -11,10 +11,11 @@ from netify_classify import Classifier
 from netify_storage import save_limit, footprint, read_settings_snapshot
 from netify_control import set_enabled, control_status
 from netify_query import aggregate, empty_classification_coverage, normalize_filters
-from netify_accounting import interface_choices, save_interface
+from netify_accounting import interface_choices, save_interface, split_interface_history
 from netify_update import read_status, start_check, start_install
+from netify_wan import query_wan
 
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 
 
 DB_PATH = "/tmp/netify-stats/stats.db"
@@ -65,8 +66,9 @@ def query_summary(params):
     identification, search, application = normalize_filters(
         params.get('identification'), params.get('search'), params.get('application'))
     now = int(time.time())
-    # Include the boundary bucket rather than silently dropping its traffic.
-    start = max(0, ((now - hours * 3600) // 3600) * 3600) if hours else 0
+    # Exactly N hour buckets, including the partial current bucket. Expose
+    # actual bounds rather than advertising an exact rolling time window.
+    start = max(0, (now//3600-max(0,hours-1))*3600) if hours else 0
     names = device_names()
     classifier = Classifier()
     def page_value(key):
@@ -115,6 +117,10 @@ def query_summary(params):
         "applications": [],
         "hosts": [],
         "interfaces": [],
+        "tunnels": [],
+        "wan_interfaces": [],
+        "window_mode": "hour_buckets",
+        "vpn_total": {"upload": 0, "download": 0, "flows": 0},
         "interface_choices": interface_choices(),
         "selected_interface": selected,
         "active_interfaces": [selected] if selected else [],
@@ -135,7 +141,8 @@ def query_summary(params):
         table = 'hourly_data' if db.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='hourly_data'").fetchone() else 'hourly'
         has_interfaces = bool(db.execute("SELECT 1 FROM sqlite_master WHERE name='interface_hourly'").fetchone())
-        tables = [table] + (['interface_hourly'] if has_interfaces else [])
+        has_wan = bool(db.execute("SELECT 1 FROM sqlite_master WHERE name='wan_hourly'").fetchone())
+        tables = [table] + (['interface_hourly'] if has_interfaces else []) + (['wan_hourly'] if has_wan else [])
         newest = max((db.execute('SELECT MAX(bucket) FROM '+name).fetchone()[0] or 0
                       for name in tables), default=0)
         current_bucket = now//3600*3600
@@ -150,7 +157,8 @@ def query_summary(params):
         if has_archive:
             boundaries = db.execute('''SELECT MIN(first_bucket),MAX(last_bucket) FROM (
                 SELECT first_bucket,last_bucket FROM traffic_archive UNION ALL
-                SELECT first_bucket,last_bucket FROM interface_archive)''').fetchone()
+                SELECT first_bucket,last_bucket FROM interface_archive''' +
+                (' UNION ALL SELECT first_bucket,last_bucket FROM wan_archive' if has_wan else '') + ')').fetchone()
             if boundaries[0] is not None:
                 if not hours:
                     response['range_start'] = min(response['range_start'], boundaries[0])
@@ -178,6 +186,19 @@ def query_summary(params):
                     interfaces[name]['since'] = min(interfaces[name]['since'], row['since'])
                     interfaces[name]['until'] = max(interfaces[name]['until'], row['until'])
             response['interfaces'] = [interfaces[name] for name in sorted(interfaces)]
+        response['interfaces'], response['tunnels'] = split_interface_history(response['interfaces'])
+        if not (device or identification or search or application):
+            response['wan_interfaces'] = query_wan(db, start, end, now)
+            kernel = {row['name']:row for row in response['interfaces']}
+            for item in response['wan_interfaces']:
+                # Only compare matching interface names over the same SQL
+                # range. Signed residuals are discrepancies, not VPN/blocking.
+                if item['name'] in kernel and not item['direction_unconfirmed_bytes']:
+                    meter = kernel[item['name']]
+                    item['residual'] = {key:meter[key]-item[key] for key in ('upload','download')}
+                    item['interface_total'] = {key:meter[key] for key in ('upload','download')}
+                    item['interface_since'] = meter['since']
+                    item['interface_until'] = meter['until']
         latest_ips = {}
         if db.execute("SELECT 1 FROM sqlite_master WHERE name='device_latest'").fetchone():
             latest_ips = dict(db.execute('SELECT mac, ip FROM device_latest'))

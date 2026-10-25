@@ -15,6 +15,7 @@ netify_query.py
 netify_rpc.py
 netify_storage.py
 netify_update.py
+netify_wan.py
 netifyd.conf
 po/zh_Hans/netify-stats.po
 po/zh_Hant/netify-stats.po
@@ -45,6 +46,7 @@ test_filtering.py
 test_stats.py
 test_storage.py
 test_update.py
+test_wan.py
 test_update_manifest.py
 test_logic.cjs
 test_interface_ui.cjs

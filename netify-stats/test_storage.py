@@ -81,7 +81,7 @@ class StorageTests(unittest.TestCase):
             self.assertIsNone(db.execute("SELECT 1 FROM sqlite_master WHERE name='hourly_data_v3'").fetchone())
             storage.compact_schema(db)
             self.assertEqual(checksum(db), before)
-            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 4)
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 5)
             self.assertEqual(db.execute('SELECT COUNT(*) FROM traffic_hosts').fetchone()[0], 3)
             self.assertEqual(db.execute('PRAGMA foreign_key_check').fetchall(), [])
             for column, index in (('device_id','hourly_device_bucket'), ('host_id','hourly_host')):
@@ -636,7 +636,7 @@ class ArchiveTests(unittest.TestCase):
             all_data = rpc.query_summary({})
             recent = rpc.query_summary({'hours':168})
         self.assertEqual(all_data['interfaces'][0]['download'],50)
-        self.assertEqual(recent['interfaces'][0]['download'],30)
+        self.assertEqual(recent['interfaces'],[])  # Boundary is outside the 168 selected hour buckets.
         self.policy.archive(self.now)
         self.assertEqual(self.db.execute('SELECT download,upload FROM interface_archive').fetchone(),(20,30))
 

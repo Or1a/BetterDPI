@@ -189,7 +189,7 @@ class StatsTest(unittest.TestCase):
             collector.DB_PATH = rpc.DB_PATH = os.path.join(directory, 'stats.db')
             instance = collector.Collector()
             now = int(time.time())
-            boundary = ((now - 3600) // 3600) * 3600
+            boundary = (now // 3600) * 3600
             rows = [(boundary, 'mac%d' % i, 'ip%d' % i, 'app%d' % i, 'TLS', 'host%d' % i, i + 1, 100, 1) for i in range(75)]
             instance.db.executemany('INSERT INTO hourly VALUES (?,?,?,?,?,?,?,?,?)', rows)
             instance.db.commit()

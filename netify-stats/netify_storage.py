@@ -186,7 +186,7 @@ def compact_schema(db):
     db.create_function('netify_host_key', 1,
                        lambda value: cached_host_key(value) if len(value) <= 253 else _host_key(value),
                        deterministic=True)
-    if db.execute('PRAGMA user_version').fetchone()[0] > 4:
+    if db.execute('PRAGMA user_version').fetchone()[0] > 5:
         raise sqlite3.DatabaseError('Unsupported statistics schema version')
     kind = db.execute("SELECT type FROM sqlite_master WHERE name='hourly'").fetchone()[0]
     columns = {row[1] for row in db.execute('PRAGMA table_info(hourly_data)')}
@@ -264,7 +264,9 @@ def compact_schema(db):
         name TEXT PRIMARY KEY,download INTEGER NOT NULL,upload INTEGER NOT NULL,
         since INTEGER NOT NULL,until INTEGER NOT NULL,resets INTEGER NOT NULL,
         first_bucket INTEGER NOT NULL,last_bucket INTEGER NOT NULL) WITHOUT ROWID''')
-    db.execute('PRAGMA user_version=4')
+    from netify_wan import create_schema as create_wan_schema
+    create_wan_schema(db)
+    db.execute('PRAGMA user_version=5')
     db.commit()
     if changed or db.execute('PRAGMA auto_vacuum').fetchone()[0] != 2:
         db.execute('PRAGMA auto_vacuum=INCREMENTAL')
@@ -529,11 +531,28 @@ class StoragePolicy:
                 buckets.add(bucket)
                 if time.monotonic() >= deadline:
                     break
+            # WAN is a separate accounting layer. Compact its peer details
+            # without ever merging them into LAN or kernel interface totals.
+            wan_rows = self.db.execute('SELECT * FROM wan_hourly WHERE bucket<? ORDER BY bucket LIMIT ?',
+                                       (cutoff, ARCHIVE_BATCH_SIZE)).fetchall()
+            for bucket,interface,category,evidence,device,peer,protocol,up,down,events,_ in wan_rows:
+                self.db.execute('''INSERT INTO wan_archive VALUES (?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(interface,category,evidence,device,protocol) DO UPDATE SET
+                    upload=upload+excluded.upload,download=download+excluded.download,
+                    events=events+excluded.events,first_bucket=MIN(first_bucket,excluded.first_bucket),
+                    last_bucket=MAX(last_bucket,excluded.last_bucket)''',
+                    (interface,category,evidence,device,protocol,up,down,events,bucket,bucket))
+                self.db.execute('''DELETE FROM wan_hourly WHERE bucket=? AND interface=? AND category=?
+                    AND evidence=? AND device=? AND peer=? AND protocol=?''',
+                    (bucket,interface,category,evidence,device,peer,protocol))
+                buckets.add(bucket)
+                if time.monotonic() >= deadline:
+                    break
             complete = {bucket for bucket in buckets if not self.db.execute(
                 'SELECT 1 FROM hourly_data WHERE bucket=? LIMIT 1', (bucket,)).fetchone()}
             pending = any(self.db.execute('SELECT 1 FROM '+table+' WHERE bucket<? LIMIT 1',
                                          (cutoff,)).fetchone()
-                          for table in ('hourly_data','interface_hourly'))
+                          for table in ('hourly_data','interface_hourly','wan_hourly'))
         # Publish only after the transaction committed successfully.
         self._pruned_buckets.update(complete)
         self.archive_pending = pending
@@ -588,6 +607,12 @@ class StoragePolicy:
                     archived = self.db.execute('''SELECT last_bucket,0,device_id,application,protocol_id
                         FROM traffic_archive UNION ALL SELECT last_bucket,1,0,name,0
                         FROM interface_archive ORDER BY 1 LIMIT 1''').fetchone()
+                    wan_oldest = self.db.execute('SELECT last_bucket,interface,category,evidence,device,protocol FROM wan_archive ORDER BY last_bucket LIMIT 1').fetchone()
+                    if wan_oldest is not None and (archived is None or wan_oldest[0] <= archived[0]):
+                        self.db.execute('DELETE FROM wan_archive WHERE interface=? AND category=? AND evidence=? AND device=? AND protocol=?', wan_oldest[1:])
+                        if time.monotonic() >= deadline:
+                            break
+                        continue
                     if archived is not None:
                         _, kind, identity, app, protocol = archived
                         if kind:
@@ -600,11 +625,12 @@ class StoragePolicy:
                         if time.monotonic() >= deadline:
                             break
                         continue
-                    oldest = self.db.execute('SELECT MIN(bucket) FROM (SELECT MIN(bucket) bucket FROM hourly_data UNION ALL SELECT MIN(bucket) FROM interface_hourly)').fetchone()[0]
+                    oldest = self.db.execute('SELECT MIN(bucket) FROM (SELECT MIN(bucket) bucket FROM hourly_data UNION ALL SELECT MIN(bucket) FROM interface_hourly UNION ALL SELECT MIN(bucket) FROM wan_hourly)').fetchone()[0]
                     if oldest is None:
                         break
                     self.db.execute('DELETE FROM hourly_data WHERE bucket=?', (oldest,))
                     self.db.execute('DELETE FROM interface_hourly WHERE bucket=?', (oldest,))
+                    self.db.execute('DELETE FROM wan_hourly WHERE bucket=?', (oldest,))
                     removed += 1
                     removed_buckets.add(oldest)
                     # Host dictionaries can occupy more space than the rows

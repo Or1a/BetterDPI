@@ -48,3 +48,39 @@ assert(explanation.includes('Attention needed'));
 assert.equal(text(panel({...damaged,device:'aa:bb',search:'example.test',identification:'protocol',application:'protocol:tls'})),explanation);
 assert(!text(panel({...healthy,collector:{...healthy.collector,events:'broken'}})).includes('NaN'));
 console.log('Diagnostics: actual service states, clock source, idle/stale status, and session counters OK');
+
+// Each accounting layer is presented separately; signed gaps are not clamped.
+for (const locale of ['en','zh-Hans','zh-Hant']) {
+ const fixture={...base(),hours:24,range_start:1792886400,range_end:1792897200,
+  total:{upload:100,download:200},vpn_total:{upload:100,download:200},
+  wan_interfaces:[{name:'wan',upload:100,download:200,
+   residual:{upload:50,download:-20},categories:{tunnel:{upload:100,download:200}},
+   details:[{category:'tunnel',evidence:'observed_vpn_protocol',peer:'192.0.2.1',upload:100,download:200}],
+   hours:[{bucket:1792886400,upload:100,download:200,residual_upload:50,residual_download:-20}]}],
+  tunnels:[{name:'tailscale0',kind:'tun',upload:100,download:200}],
+  collector:{wan:{duplicates:1,capacity_omitted_events:2,cursor_evictions:2}}};
+ const panel=setup(fixture,{}, {locale}).root;
+ assert(panel.querySelector('.ns-wan-accounting'));
+ assert(panel.querySelector('.ns-tunnel-accounting'));
+ assert(panel.querySelector('.ns-device-vpn'));
+ assert(panel.querySelector('.ns-hour-window'));
+ assert(text(panel.querySelector('.ns-wan-residual')).includes('−20 B'));
+ assert.equal(fixture.total.upload,100);
+ const filtered=setup({...fixture,device:'one'}, {},{locale}).root;
+ assert.equal(filtered.querySelector('.ns-wan-accounting'),null);
+ assert.equal(filtered.querySelector('.ns-tunnel-accounting'),null);
+}
+
+// The repeated local hour at DST fallback must carry distinct zone labels.
+const previousTimezone=process.env.TZ;
+try {
+ process.env.TZ='Europe/London';
+ const first=Date.parse('2026-10-25T00:00:00Z')/1000, second=first+3600;
+ const root=setup({...base(),wan_interfaces:[{name:'wan',hours:[
+  {bucket:first,upload:1,download:2},{bucket:second,upload:1,download:2}]}]}, {},{locale:'en'}).root;
+ const visible=text(root.querySelector('.ns-wan-accounting'));
+ assert(visible.includes('GMT+1') || visible.includes('BST'));
+ assert(visible.includes('GMT'));
+} finally {
+ if (previousTimezone == null) delete process.env.TZ; else process.env.TZ=previousTimezone;
+}
