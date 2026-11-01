@@ -1185,3 +1185,39 @@ msgstr "規則解除失敗"
 
 msgid "Rule installed"
 msgstr "規則已安裝"
+
+msgid "Status could not be read. Settings and collector state are unknown; changes are disabled."
+msgstr "無法讀取狀態，設定和採集器狀態未知；暫時無法修改。"
+
+msgid "Settings could not be read. Changes are disabled until configuration is available."
+msgstr "無法讀取設定；成功讀取配置後才能修改。"
+
+msgid "Showing the last successful response; current status is unknown."
+msgstr "目前顯示上次成功讀取的結果；最新狀態未知。"
+
+msgid "Chart window"
+msgstr "圖表時間範圍"
+
+msgid "Recent 60 minutes"
+msgstr "最近60分鐘"
+
+msgid "Selected time range"
+msgstr "所選時間範圍"
+
+msgid "Chart window: %s to %s. Totals and rankings use the time range selected above."
+msgstr "圖表時間範圍：%s 至 %s。總量和排行榜使用上方選擇的時間範圍。"
+
+msgid "Application and traffic filters use hourly bars for the selected time range."
+msgstr "應用和流量篩選採用所選時間範圍的小時長條圖。"
+
+msgid "No minute history yet. New observations will appear here; earlier minutes cannot be reconstructed."
+msgstr "暫無分鐘歷史資料。新的採集資料會顯示於此，無法還原先前的分鐘記錄。"
+
+msgid "Some minutes have incomplete collection. Gaps are unknown traffic, not zero."
+msgstr "部分分鐘的採集不完整。缺口表示流量未知，而不是零流量。"
+
+msgid "No observation"
+msgstr "未採集"
+
+msgid "Partial observation"
+msgstr "部分採集"

@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-netify-stats
-PKG_VERSION:=0.4.0
+PKG_VERSION:=0.4.1
 PKG_RELEASE:=1
 PKG_LICENSE:=GPL-3.0-only
 PKG_LICENSE_FILES:=LICENSE
@@ -48,7 +48,7 @@ define Package/luci-app-netify-stats/install
 	$(INSTALL_BIN) ./anti_pcdn_rpc.py $(1)/usr/libexec/rpcd/betterdpi-anti-pcdn
 	$(INSTALL_BIN) ./packaging/post-install $(1)/usr/lib/netify-stats/package-post-install
 	$(INSTALL_BIN) ./packaging/pre-deinstall $(1)/usr/lib/netify-stats/package-pre-deinstall
-	$(INSTALL_DATA) ./netify_accounting.py ./netify_classify.py ./netify_control.py ./netify_storage.py ./netify_proxy.py ./netify_query.py ./netify_update.py ./netify_wan.py ./netify_features.py $(1)/usr/lib/netify-stats/
+	$(INSTALL_DATA) ./netify_accounting.py ./netify_classify.py ./netify_control.py ./netify_storage.py ./netify_proxy.py ./netify_query.py ./netify_update.py ./netify_wan.py ./netify_features.py ./netify_minute.py $(1)/usr/lib/netify-stats/
 	$(INSTALL_DATA) ./features/anti_pcdn/__init__.py ./features/anti_pcdn/config.py ./features/anti_pcdn/engine.py ./features/anti_pcdn/scoring.py ./features/anti_pcdn/conntrack.py ./features/anti_pcdn/firewall.py ./features/anti_pcdn/runtime.py $(1)/usr/lib/netify-stats/anti_pcdn/
 	$(INSTALL_DATA) ./rules/community-rules.json ./rules/COMMUNITY-LICENSE ./rules/NEXTDNS-LICENSE $(1)/usr/share/netify-stats/
 	$(INSTALL_DATA) ./LICENSE $(1)/usr/share/licenses/luci-app-netify-stats/LICENSE

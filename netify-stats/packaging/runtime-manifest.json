@@ -23,6 +23,7 @@
   "i18n/netify-stats.zh-cn.lmo": ["/usr/lib/lua/luci/i18n/netify-stats.zh-cn.lmo", "0644"],
   "i18n/netify-stats.zh-tw.lmo": ["/usr/lib/lua/luci/i18n/netify-stats.zh-tw.lmo", "0644"],
   "netify_features.py": ["/usr/lib/netify-stats/netify_features.py", "0644"],
+  "netify_minute.py": ["/usr/lib/netify-stats/netify_minute.py", "0644"],
   "features/anti_pcdn/__init__.py": ["/usr/lib/netify-stats/anti_pcdn/__init__.py", "0644"],
   "features/anti_pcdn/config.py": ["/usr/lib/netify-stats/anti_pcdn/config.py", "0644"],
   "features/anti_pcdn/engine.py": ["/usr/lib/netify-stats/anti_pcdn/engine.py", "0644"],

@@ -9,24 +9,28 @@
 
 Netify 的 LAN 接口、本地 socket 和 JSON 导出仍需按 [README](README.md#netify-setup-and-first-use) 配置。安装插件不会自动修改 Netify 或代理设置。
 
-## V0.4.0 试用版
+<a id="v040-试用版"></a>
 
-V0.4.0 包含默认关闭的实验性 Anti-PCDN，已按 **Pre-release** 发布。两个官方 SDK 构建、下载附件与源码核对均已通过，可从 [V0.4.0 发布页](https://github.com/Or1a/BetterDPI/releases/tag/V0.4.0)下载。稳定版仍为 V0.3.2；应用内更新和下文的 `releases/latest` 地址不会自动提供试用版。
+## V0.4.1 试用版
+
+V0.4.1 修复 Anti-PCDN 页面的会话参数兼容问题，并新增设备分钟柱状趋势图。此版本按 **Pre-release** 准备，官方 SDK 构建及下载附件校验尚待本次流水线完成，以 [V0.4.1 发布页](https://github.com/Or1a/BetterDPI/releases/tag/V0.4.1)实际生成的附件为准。稳定版仍为 V0.3.2；应用内更新和下文的 `releases/latest` 地址不会自动提供试用版。
 
 | OpenWrt | 试用包固定文件名及下载链接 |
 | --- | --- |
-| 24.10 | [BetterDPI-openwrt-24.10-all.ipk](https://github.com/Or1a/BetterDPI/releases/download/V0.4.0/BetterDPI-openwrt-24.10-all.ipk) |
-| 25.12 | [BetterDPI-openwrt-25.12-all.apk](https://github.com/Or1a/BetterDPI/releases/download/V0.4.0/BetterDPI-openwrt-25.12-all.apk) |
+| 24.10 | [BetterDPI-openwrt-24.10-all.ipk](https://github.com/Or1a/BetterDPI/releases/download/V0.4.1/BetterDPI-openwrt-24.10-all.ipk) |
+| 25.12 | [BetterDPI-openwrt-25.12-all.apk](https://github.com/Or1a/BetterDPI/releases/download/V0.4.1/BetterDPI-openwrt-25.12-all.apk) |
 
 使用下方「下载、校验后安装」命令时，选择与系统对应的包名，并把 `betterdpi_release` 那一行改为：
 
 ```sh
-betterdpi_release='https://github.com/Or1a/BetterDPI/releases/download/V0.4.0'
+betterdpi_release='https://github.com/Or1a/BetterDPI/releases/download/V0.4.1'
 ```
 
-这样安装包和 `SHA256SUMS` 都来自 V0.4.0；不要使用 V0.3.2 的校验值。已有 BetterDPI 可直接覆盖安装同一包 `luci-app-netify-stats`，无需先卸载或重启路由器。升级会短暂中断采集并重启 rpcd，完成后刷新页面；已保存的流量分析开关和数据仍按原有规则保留。
+这样安装包和 `SHA256SUMS` 都来自 V0.4.1；不要使用其他版本的校验值。**V0.4.0 用户也需手动覆盖升级**，应用内更新不提供预发布版本。已有 BetterDPI 可直接安装同一包 `luci-app-netify-stats`，无需先卸载或重启路由器。升级会短暂中断采集并重启 rpcd，完成后刷新页面；若浏览器仍显示旧界面，请强制刷新。已保存的流量分析开关和数据仍按原有规则保留。
 
-打开 **状态 → Anti-PCDN**，选择 Netify 已采集的实际 LAN 接口，再启用「仅观察」。该功能依赖 DPI 采集器运行；打开 Anti-PCDN 不会恢复被用户暂停的流量分析。等待至少 5 分钟观察评分和采集缺口，将需要保留的设备或域名加入白名单。需要自动处置时可切换「自动封禁」，默认 **80 分、120 秒**，并保留连接身份、窗口完整性和执行路径检查。
+趋势图默认使用「最近60分钟」，上传和下载分别显示为柱子；上方原有时间选择继续控制总量和排行榜。可在图表内切换为「所选时间范围」查看小时趋势。分钟记录只从升级后开始采集，旧小时记录不会补造为分钟；缺失和不完整采集会明确标注。应用、域名和识别筛选使用对应时间范围的小时图，见[分钟趋势说明](docs/minute-trend.md)。
+
+Anti-PCDN 默认关闭；已有配置会保留。打开 **状态 → Anti-PCDN**，选择 Netify 已采集的实际 LAN 接口，再启用「仅观察」。该功能依赖 DPI 采集器运行；打开 Anti-PCDN 不会恢复被用户暂停的流量分析。等待至少 5 分钟观察评分和采集缺口，将需要保留的设备或域名加入白名单。需要自动处置时可切换「自动封禁」，默认 **80 分、120 秒**，并保留连接身份、窗口完整性和执行路径检查。
 
 自动处置适用于支持的 fw4/nftables 普通路由路径；已知卸载、TPROXY、DNAT 和不可分离的共享隧道会拒绝新增封禁。真实路由器负载和业务误判尚待试用验证，详细边界见 [Anti-PCDN 说明](docs/anti-pcdn-design.md)。
 
@@ -39,7 +43,7 @@ https://github.com/Or1a/BetterDPI/releases/latest/download/BetterDPI-openwrt-24.
 https://github.com/Or1a/BetterDPI/releases/latest/download/BetterDPI-openwrt-25.12-all.apk
 ```
 
-**当前稳定版为 [V0.3.2](https://github.com/Or1a/BetterDPI/releases/tag/V0.3.2)，上述稳定版固定地址与应用内更新清单已核对指向该版本。** 确定版本的下载地址与校验和见 [README](README.md#command-line-download)。试用 V0.4.0 请使用上方指定标签的地址。
+**当前稳定版为 [V0.3.2](https://github.com/Or1a/BetterDPI/releases/tag/V0.3.2)，上述稳定版固定地址与应用内更新清单已核对指向该版本。** 确定版本的下载地址与校验和见 [README](README.md#command-line-download)。试用 V0.4.1 请使用上方指定标签的地址。
 
 OpenWrt 24.10 可以直接运行：
 

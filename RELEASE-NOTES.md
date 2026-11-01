@@ -1,43 +1,39 @@
-# BetterDPI V0.4.0 — Anti-PCDN 试用版
+# BetterDPI V0.4.1 — 状态修复与分钟趋势试用版
 
-本次将独立的 Anti-PCDN 功能纳入主线，以 **Pre-release** 提供试用。**功能默认关闭**，现有流量统计继续使用原有口径；启用后复用当前 Netify 实时事件，不另起抓包，也不把评分观察量加入统计总数。稳定版仍为 V0.3.2，应用内更新和 `releases/latest` 不会自动切换到本试用版。
+V0.4.0 的 Anti-PCDN 页面会把 LuCI 自动附带的会话参数误判为非法参数，导致状态读取、设置保存和解除规则失败。V0.4.1 修复这一兼容问题；读取失败时明确显示未知或过期状态，不再用默认值冒充采集器的实际状态。
 
-## 新增功能
+本次同时新增真实设备分钟记录，趋势图默认显示最近 60 分钟的上传／下载并列柱状图。继续以 **Pre-release** 提供试用，稳定版仍为 V0.3.2；V0.4.0 用户需手动覆盖升级，应用内更新不会自动提供本版本。
 
-- 独立的「状态 → Anti-PCDN」页面、配置、RPC 和简繁中文界面，支持「仅观察」和「自动封禁」。
-- 根据短期对端数量、实质上传、持续性、上下行比例及可选域名提示计算滚动评分。四项行为证据可以达到默认 **80 分**；分数不是经过校准的 PCDN 概率。
-- 自动处置仅针对符合条件的当前连接。默认期限 **120 秒**，提供设备/域名白名单、提前解除和内核自动到期；不会封整台设备或全部 UDP。
-- 累计水位去重、迟到和缺口检查，以及逐连接的封禁重试抑制，防止重复上报加分或靠被封后的重试不断续期。
-- 队列、样本、连接和每轮动作均有上限。达到容量上限会报告覆盖损失，证据不完整时暂停对应自动动作。
+## 本次改动
 
-## 下载与覆盖安装
+- 接受 LuCI 注入的 `ubus_rpc_session` 会话字段，恢复 Anti-PCDN 的状态、保存和解除操作；保留其他参数检查。
+- 状态读取失败时提示错误；已有成功结果标为旧结果，配置未知时禁用修改，避免错误地显示「已关闭」或虚假的采集器状态。
+- 记录已计入设备账的每分钟上传和下载，图表默认展示最近 60 分钟。选择设备后，分钟图也限定到该设备。
+- 图表内新增独立时间范围选择：「最近60分钟」使用分钟记录，「所选时间范围」使用小时记录。上方的总量、排行榜继续遵循原有时间范围。
+- 缺失分钟和部分采集明确标记，旧小时数据不会拆成虚构的分钟记录。应用、域名和识别筛选使用所选时间范围的小时图，并显示说明。
+- 分钟索引最多保留最近 2 小时、32,768 行数字记录，写入缓冲最多 2,048 项；复用现有 `/tmp` 数据库和约 3 秒的提交周期，不新增抓包或独立定时采集。
 
-发布流水线成功后，本标签会提供以下试用附件；以发布页实际生成的附件为准：
+分钟图是已有设备增量的短期展示，不与原有总量重复相加。Anti-PCDN 仍默认关闭，已有设置保留，自动处置的初始阈值和期限仍为 **80 分／120 秒**。
 
-| OpenWrt | 下载 |
+## 下载与升级
+
+发布流水线在两个官方 SDK 构建成功后上传以下试用包，见 [V0.4.1 发布页](https://github.com/Or1a/BetterDPI/releases/tag/V0.4.1)：
+
+| OpenWrt | 试用包 |
 | --- | --- |
-| 24.10（24.10.8 官方 SDK，IPK） | [BetterDPI-openwrt-24.10-all.ipk](https://github.com/Or1a/BetterDPI/releases/download/V0.4.0/BetterDPI-openwrt-24.10-all.ipk) |
-| 25.12（25.12.5 官方 SDK，APK） | [BetterDPI-openwrt-25.12-all.apk](https://github.com/Or1a/BetterDPI/releases/download/V0.4.0/BetterDPI-openwrt-25.12-all.apk) |
+| 24.10（IPK） | [BetterDPI-openwrt-24.10-all.ipk](https://github.com/Or1a/BetterDPI/releases/download/V0.4.1/BetterDPI-openwrt-24.10-all.ipk) |
+| 25.12（APK） | [BetterDPI-openwrt-25.12-all.apk](https://github.com/Or1a/BetterDPI/releases/download/V0.4.1/BetterDPI-openwrt-25.12-all.apk) |
 
-同时生成带 `0.4.0` 版本号的同内容包、`SHA256SUMS` 和 `update.json`。本次为预发布，试用时需手动选择上述 `V0.4.0` 标签的包及校验文件，不能使用稳定版的校验值。
+使用同一 V0.4.1 发布页的 `SHA256SUMS` 校验后，覆盖安装 `luci-app-netify-stats`。无需先卸载或重启路由器；升级会短暂停止采集并重启 rpcd。完成后刷新 LuCI，若仍是旧界面则强制刷新。新分钟记录从升级后的采集开始，升级前的小时统计继续保留。APK 沿用单次本地安装的 `--allow-untrusted`。
 
-已有 BetterDPI 可覆盖安装同一包 `luci-app-netify-stats`，无需先卸载或重启路由器；升级期间采集会短暂停止，rpcd 会重启，完成后刷新 LuCI。软件包保留现有配置，不自动开启 Anti-PCDN，也不修改 Netify、代理或加速设置。APK 沿用单次本地安装的 `--allow-untrusted`，不更改全局签名策略。完整命令见 [安装说明](https://github.com/Or1a/BetterDPI/blob/V0.4.0/INSTALL.md#v040-试用版)。
+安装命令见 [试用版安装说明](https://github.com/Or1a/BetterDPI/blob/V0.4.1/INSTALL.md#v041-试用版)。`releases/latest` 和应用内更新仍指向稳定版，不会提供试用更新。
 
-## 开始试用
+## 验证与边界
 
-1. 保持 DPI 流量采集运行，打开 **状态 → Anti-PCDN**，选择 Netify 实际采集的 LAN 接口。
-2. 开启「仅观察」，等待至少 5 分钟建立完整窗口，检查评分依据和采集缺口，将需要保留的设备或域名加入白名单。
-3. 如需自动处置，切换「自动封禁」并保存。达到阈值后还须通过连接身份、当前上传、窗口完整性和执行路径检查。页面可提前解除临时规则。
+267 项 Python 回归和 10 个 Node 测试套件通过，覆盖 LuCI 会话参数、读取失败状态、设备分钟查询、去重和代理纠正、保留上限、事务失败、缺失标记，以及图表范围与原有统计范围的独立性。SDK 构建结果以本次发布流水线为准。
 
-关闭功能会清理自有规则；采集停止时该功能一起停止。安装规则成功不等于已经验证实际转发效果，DPI 观察字节也不是成功拦截字节。
+分钟粒度按采集器的实际记账时间聚合，不代表逐包时间；Netify 延迟上报、采集中断和容量限制仍可能造成部分覆盖。分钟表不保存应用、域名或连接端口维度，因此相关筛选继续使用小时记录。所有统计仍位于 `/tmp`，路由器重启会清空。
 
-## 支持范围和验证
+Anti-PCDN 的 fw4/nftables 支持范围、卸载和共享隧道限制保持不变。已有隔离软件网络测试不替代 OpenWrt 真机验证，也不证明 PCDN 识别准确率。源码准备检查继续保留 `public_release_ready:false`。
 
-自动处置面向支持的 **fw4/nftables 普通 TCP/UDP 路由路径**。已知流卸载、NSS/SFE 等厂商加速、TPROXY、DNAT、归属不明确或不可分离的共享隧道会拒绝新增封禁。不会为执行功能而全局关闭加速。主动 BT、合法 P2P 分享也可能满足行为条件；真实误判率和路由器 CPU/RAM 仍需试用验证。
-
-- 243 项 Python 回归和 10 个 Node 测试套件通过，覆盖评分、去重、白名单、数据缺口、执行回滚、配置切换、界面及安装清单。
-- 隔离的软件网络环境通过 IPv4/IPv6 的 TCP/UDP、双向阻断、无关连接保护、非 DNAT 入站 UDP、提前解除及 30 秒内核自动到期测试。环境为 Linux 6.18.57、nft 1.1.3、模拟 fw4 和空模块清单，不代表 OpenWrt 实机或硬件加速已验收。
-- 发布流水线在两种官方 SDK 构建成功后上传安装包、版本清单及 SHA-256 校验文件。源码准备检查保留 `public_release_ready:false`；真实路由器升级和长期运行仍待试用验证。
-- 性能测量使用云主机合成事件，达到样本上限时会失去部分判断覆盖，不作为路由器性能保证。
-
-详细条件见 [Anti-PCDN 说明](https://github.com/Or1a/BetterDPI/blob/V0.4.0/docs/anti-pcdn-design.md)，测试方法和开销边界见 [验证记录](https://github.com/Or1a/BetterDPI/blob/V0.4.0/docs/anti-pcdn-validation.md)。
+详见 [分钟趋势说明](https://github.com/Or1a/BetterDPI/blob/V0.4.1/docs/minute-trend.md)及 [Anti-PCDN 说明](https://github.com/Or1a/BetterDPI/blob/V0.4.1/docs/anti-pcdn-design.md)。

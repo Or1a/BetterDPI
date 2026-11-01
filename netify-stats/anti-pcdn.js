@@ -58,13 +58,33 @@ function checkedResponse(result) {
 	if (!result || result.error || result.ok !== true) throw new Error(result && result.error || _('The request failed.'));
 	return result;
 }
+function validSettings(settings) {
+	settings = object(settings);
+	return typeof settings.enabled === 'boolean' && ['observe', 'auto'].includes(settings.mode)
+		&& typeof settings.interface === 'string' && settings.interface.length > 0
+		&& Number.isInteger(settings.threshold) && settings.threshold >= 1 && settings.threshold <= 100
+		&& Number.isInteger(settings.ban_seconds) && settings.ban_seconds >= 30 && settings.ban_seconds <= 600
+		&& ['allow_devices', 'allow_domains', 'pcdn_domains'].every(function(key) {
+			return Array.isArray(settings[key]) && settings[key].every(function(value) { return typeof value === 'string'; });
+		}) && weights.every(function(key) { var value = object(settings.weights)[key]; return Number.isInteger(value) && value >= 0 && value <= 40; })
+		&& weights.reduce(function(total, key) { return total + settings.weights[key]; }, 0) === 100;
+}
+function validStatus(data) {
+	return !!data && !data.error && data.ok !== false && validSettings(data.settings)
+		&& typeof data.stale === 'boolean' && typeof data.collector_recent === 'boolean'
+		&& typeof data.collector_connected === 'boolean' && !!data.runtime
+		&& typeof data.runtime === 'object' && !Array.isArray(data.runtime);
+}
+function checkedStatus(data) {
+	if (!validStatus(data)) throw new Error(data && data.error || _('Runtime status is unavailable.'));
+	return data;
+}
+function settingsAvailable(data) { return validStatus(data) && !data.request_error && !data.config_error; }
 
 return view.extend({
 	load: function() {
-		return readStatus().then(function(data) {
-			if (!data || data.error) throw new Error(data && data.error || _('Runtime status is unavailable.'));
-			return data;
-		}).catch(function(error) { return {runtime_error: text(error.message || error), stale: true}; });
+		return readStatus().then(checkedStatus)
+			.catch(function(error) { return {request_error: text(error.message || error)}; });
 	},
 	render: function(data) {
 		this.epoch = 0;
@@ -77,14 +97,15 @@ return view.extend({
 		this.leasesPanel = E('div');
 		this.diagnosticsPanel = E('div');
 		this.saveButton = E('button', {class: 'cbi-button cbi-button-apply', click: this.save.bind(this)}, _('Save Anti-PCDN settings'));
-		var form = this.settingsForm(object(this.data.settings));
+		this.settingsLoaded = settingsAvailable(this.data);
+		this.formPanel = E('div', {}, this.settingsForm(object(this.data.settings)));
 		this.updateStatus(this.data);
 		poll.add(this.refresh.bind(this), 5);
 		return E('div', {class: 'cbi-map'}, [
 			E('h2', {}, _('Anti-PCDN')),
 			E('p', {}, _('Optional short-window scoring for individual LAN connections. Scores indicate suspicion, not proof of PCDN.')),
 			E('p', {}, _('This feature requires the DPI collector to be running. Enabling it does not start paused traffic analysis. It does not add its observations to traffic totals.')),
-			this.statusPanel, form, this.saveButton, this.notice,
+			this.statusPanel, this.formPanel, this.saveButton, this.notice,
 			E('h3', {}, _('Scored connections')), this.rowsPanel,
 			E('h3', {}, _('Temporary connection rules')),
 			E('p', {}, _('Installed rules are not proof that traffic was successfully blocked. Observed bytes are DPI observations, not blocked bytes.')),
@@ -133,7 +154,7 @@ return view.extend({
 		return result;
 	},
 	save: function() {
-		if (this.busy) return Promise.resolve();
+		if (this.busy || !settingsAvailable(this.data)) return Promise.resolve();
 		this.busy = true;
 		this.epoch++;
 		this.saveButton.disabled = true;
@@ -145,24 +166,30 @@ return view.extend({
 			dom.content(this.notice, _('Could not save settings:') + ' ' + text(error.message || error));
 		}.bind(this)).finally(function() {
 			this.busy = false;
-			this.saveButton.disabled = false;
+			this.updateStatus(this.data);
 		}.bind(this));
 	},
 	refresh: function() {
 		var epoch = this.epoch, sequence = ++this.sequence;
 		return readStatus().then(function(data) {
 			if (epoch !== this.epoch || sequence !== this.sequence) return;
-			if (!data || data.error) throw new Error(data && data.error || _('Runtime status is unavailable.'));
-			this.data = data;
+			this.data = checkedStatus(data);
+			// An initial failed read leaves only disabled placeholders. Populate
+			// actual saved values once recovered; normal polls preserve drafts.
+			if (!this.settingsLoaded && settingsAvailable(data)) {
+				this.inputs = {};
+				dom.content(this.formPanel, this.settingsForm(data.settings));
+				this.settingsLoaded = true;
+			}
 			this.updateStatus(data);
 		}.bind(this)).catch(function(error) {
 			if (epoch !== this.epoch || sequence !== this.sequence) return;
-			this.data = Object.assign({}, this.data, {stale: true, runtime_error: text(error.message || error)});
+			this.data = Object.assign({}, this.data, {request_error: text(error.message || error)});
 			this.updateStatus(this.data);
 		}.bind(this));
 	},
 	release: function(id) {
-		if (this.releasing || this.data.stale !== false || this.data.release_pending) return Promise.resolve();
+		if (this.releasing || !validStatus(this.data) || this.data.request_error || this.data.stale !== false || this.data.release_pending) return Promise.resolve();
 		this.releasing = true;
 		this.epoch++;
 		this.updateStatus(this.data);
@@ -179,17 +206,32 @@ return view.extend({
 	},
 	updateStatus: function(data) {
 		var runtime = object(data.runtime), settings = object(data.settings), messages = [];
-		messages.push(E('p', {}, settings.enabled === true ? _('Anti-PCDN is enabled in settings.') : _('Anti-PCDN is disabled in settings.')));
-		if (settings.enabled === true && (runtime.enabled !== true || runtime.mode !== settings.mode) || settings.enabled === false && runtime.enabled === true)
-			messages.push(E('p', {}, _('Saved settings are awaiting the collector.')));
-		if (data.collector_recent !== true) messages.push(E('p', {class: 'alert-message warning'}, _('No recent DPI collector heartbeat. Start traffic analysis to collect evidence.')));
-		else if (data.collector_connected !== true) messages.push(E('p', {class: 'alert-message warning'}, _('The DPI collector is not connected; evidence may be incomplete.')));
-		if (data.stale !== false) messages.push(E('p', {class: 'alert-message warning'}, _('Runtime status is stale or unavailable. Listed rules may have expired; release is disabled.')));
-		if (runtime.mode === 'observe') messages.push(E('p', {}, _('Observation only: threshold crossings do not install rules.')));
-		[data.config_error, data.runtime_error, runtime.error, runtime.executor_error].filter(Boolean).forEach(function(error) {
+		var available = validStatus(data) && !data.request_error;
+		var editable = settingsAvailable(data) && !this.busy;
+		this.saveButton.disabled = !editable;
+		Object.keys(this.inputs).forEach(function(key) { this.inputs[key].disabled = !editable; }, this);
+		if (!available) {
+			messages.push(E('p', {class: 'alert-message warning'}, _('Status could not be read. Settings and collector state are unknown; changes are disabled.')));
+			if (validStatus(data)) messages.push(E('p', {}, _('Showing the last successful response; current status is unknown.')));
+		} else {
+			if (data.config_error) messages.push(E('p', {class: 'alert-message warning'}, _('Settings could not be read. Changes are disabled until configuration is available.')));
+			else {
+				messages.push(E('p', {}, settings.enabled === true ? _('Anti-PCDN is enabled in settings.') : _('Anti-PCDN is disabled in settings.')));
+				if (settings.enabled === true && (runtime.enabled !== true || runtime.mode !== settings.mode) || settings.enabled === false && runtime.enabled === true)
+					messages.push(E('p', {}, _('Saved settings are awaiting the collector.')));
+			}
+			if (settings.enabled === true) {
+				if (data.collector_recent !== true) messages.push(E('p', {class: 'alert-message warning'}, _('No recent DPI collector heartbeat. Start traffic analysis to collect evidence.')));
+				else if (data.collector_connected !== true) messages.push(E('p', {class: 'alert-message warning'}, _('The DPI collector is not connected; evidence may be incomplete.')));
+			}
+			if (data.stale !== false && (settings.enabled === true || runtime.enabled === true || list(runtime.leases).length))
+				messages.push(E('p', {class: 'alert-message warning'}, _('Runtime status is stale or unavailable. Listed rules may have expired; release is disabled.')));
+			if (runtime.mode === 'observe') messages.push(E('p', {}, _('Observation only: threshold crossings do not install rules.')));
+		}
+		(data.request_error ? [data.request_error] : [data.config_error, data.runtime_error, runtime.error, runtime.executor_error]).filter(Boolean).forEach(function(error) {
 			messages.push(E('p', {class: 'alert-message warning'}, text(error)));
 		});
-		if (data.release_pending) messages.push(E('p', {}, _('A release request is pending.')));
+		if (available && data.release_pending) messages.push(E('p', {}, _('A release request is pending.')));
 		dom.content(this.statusPanel, messages);
 		var rows = list(runtime.candidates).slice(0, 64).map(function(row) {
 			row = object(row);
@@ -208,7 +250,7 @@ return view.extend({
 		var leaseRows = list(runtime.leases).slice(0, 64).map(function(lease) {
 			lease = object(lease);
 			var button = E('button', {class: 'cbi-button cbi-button-reset', click: this.release.bind(this, lease.id)}, _('Release rule'));
-			button.disabled = !!this.releasing || data.stale !== false || !!data.release_pending;
+			button.disabled = !!this.releasing || !available || data.stale !== false || !!data.release_pending;
 			var remaining = Number(lease.remaining);
 			var ruleState = lease.state === 'installed' ? _('Rule installed; blocking not independently verified')
 				: lease.state === 'unverified_cleanup_pending' ? _('Rule verification failed; cleanup pending until kernel expiry')

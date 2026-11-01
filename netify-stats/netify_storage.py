@@ -295,7 +295,7 @@ class HourlyWriter:
 
     def write(self, values):
         try:
-            self._write(values)
+            return self._write(values)
         except Exception:
             # SQLite aborts the failed statement; errors such as SQLITE_FULL
             # may roll back the transaction too. Never retain IDs from an
@@ -330,6 +330,7 @@ class HourlyWriter:
                 (values[0], *dimensions, *values[6:]))
             if created:
                 self.db.execute('RELEASE hourly_dimensions')
+            return dimensions[0]
         except Exception:
             if created and self.db.in_transaction:
                 self.db.execute('ROLLBACK TO hourly_dimensions')

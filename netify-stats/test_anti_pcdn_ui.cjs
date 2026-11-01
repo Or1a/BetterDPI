@@ -51,6 +51,15 @@ const releaseButton=ui=>ui.view.leasesPanel.querySelector('button');
  assert.equal(idle.view.inputs.mode.value,'observe');
  assert(text(idle.root).includes('does not start paused traffic analysis'));
  assert.deepEqual(idle.view.settingsValue(),defaults);
+ const disabledMissing=setup({...base(),stale:true,collector_recent:false,collector_connected:false,runtime:{}});
+ assert(text(disabledMissing.view.statusPanel).includes('Anti-PCDN is disabled in settings.'));
+ assert(!text(disabledMissing.view.statusPanel).includes('No recent DPI collector heartbeat'));
+ assert(!text(disabledMissing.view.statusPanel).includes('Runtime status is stale or unavailable.'));
+ assert(!disabledMissing.view.saveButton.disabled);
+ const enabledMissing=setup({...base(),settings:{...defaults,enabled:true},stale:true,
+  collector_recent:false,collector_connected:false,runtime:{}});
+ assert(text(enabledMissing.view.statusPanel).includes('No recent DPI collector heartbeat'));
+ assert(text(enabledMissing.view.statusPanel).includes('Runtime status is stale or unavailable.'));
 
  // Evidence strings must remain text nodes; no generated HTML or arbitrary
  // links are used for domains, addresses, scores or daemon error messages.
@@ -126,14 +135,66 @@ const releaseButton=ui=>ui.view.leasesPanel.querySelector('button');
  await stale.view.release(id);
  assert.equal(stale.calls.length,0);
  const offline=setup(data,{status:()=>{throw new Error('RPC offline')}});
+ const priorRows=text(offline.view.rowsPanel);
+ offline.view.inputs.threshold.value='91';
  await offline.view.refresh();
  assert(releaseButton(offline).disabled);
  assert(text(offline.view.statusPanel).includes('RPC offline'));
+ assert(text(offline.view.statusPanel).includes('Showing the last successful response; current status is unknown.'));
+ assert(!text(offline.view.statusPanel).includes('No recent DPI collector heartbeat'));
+ assert(!text(offline.view.statusPanel).includes('Anti-PCDN is disabled in settings.'));
+ assert.equal(text(offline.view.rowsPanel),priorRows);
+ assert.equal(offline.view.inputs.threshold.value,'91');
+ assert(offline.view.saveButton.disabled);
+ const beforeSave=offline.calls.length;
+ await offline.view.save();
+ await offline.view.release(id);
+ assert.equal(offline.calls.length,beforeSave);
  const missing=setup({}, {status:()=>({error:'Access denied'})});
  await missing.view.refresh();
  assert(text(missing.view.statusPanel).includes('Access denied'));
  const load=await missing.view.load();
- assert.equal(load.runtime_error,'Access denied');
+ assert.equal(load.request_error,'Access denied');
+
+ // Failed first read is unknown, never a fabricated disabled/paused state.
+ // Placeholders cannot overwrite an existing configuration. The first good
+ // poll replaces them with actual settings, and later polls preserve drafts.
+ const unavailable=setup({request_error:'Invalid method parameters.'});
+ const unavailableText=text(unavailable.view.statusPanel);
+ assert(unavailableText.includes('Settings and collector state are unknown'));
+ assert(unavailableText.includes('Invalid method parameters.'));
+ for (const falseClaim of ['Anti-PCDN is disabled in settings.','No recent DPI collector heartbeat.',
+  'Runtime status is stale or unavailable.']) assert(!unavailableText.includes(falseClaim));
+ assert(unavailable.view.saveButton.disabled);
+ assert(Object.values(unavailable.view.inputs).every(input=>input.disabled));
+ await unavailable.view.save();
+ assert.deepEqual(unavailable.calls,[]);
+ const recoveredData={...base(),settings:{...defaults,enabled:true,mode:'auto',threshold:91,
+  allow_domains:['keep.example.org']}};
+ const recovery=setup({request_error:'RPC offline'},{status:()=>recoveredData});
+ await recovery.view.refresh();
+ assert(!recovery.view.saveButton.disabled);
+ assert(Object.values(recovery.view.inputs).every(input=>!input.disabled));
+ assert.equal(recovery.view.inputs.enabled.checked,true);
+ assert.equal(recovery.view.inputs.mode.value,'auto');
+ assert.equal(recovery.view.inputs.threshold.value,'91');
+ assert.equal(recovery.view.inputs.allow_domains.value,'keep.example.org');
+ recovery.view.inputs.threshold.value='92';
+ await recovery.view.refresh();
+ assert.equal(recovery.view.inputs.threshold.value,'92');
+ assert(!text(recovery.view.statusPanel).includes('RPC offline'));
+
+ // A settings read error also must not make returned default values editable.
+ const configError=setup({...base(),config_error:'Invalid stored settings'});
+ assert(configError.view.saveButton.disabled);
+ assert(!text(configError.view.statusPanel).includes('Anti-PCDN is disabled in settings.'));
+ await configError.view.save();
+ assert.deepEqual(configError.calls,[]);
+ const malformed=setup(base(),{status:()=>({})});
+ await malformed.view.refresh();
+ assert(malformed.view.saveButton.disabled);
+ assert(text(malformed.view.statusPanel).includes('Runtime status is unavailable.'));
+ assert(!text(malformed.view.statusPanel).includes('No recent DPI collector heartbeat'));
 
  // Older requests cannot replace new status or a completed settings action.
  const old=deferred(); let reads=0;

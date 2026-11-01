@@ -14,8 +14,9 @@ from netify_query import aggregate, empty_classification_coverage, normalize_fil
 from netify_accounting import interface_choices, save_interface, split_interface_history
 from netify_update import read_status, start_check, start_install
 from netify_wan import query_wan
+from netify_minute import query_series
 
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 
 
 DB_PATH = "/tmp/netify-stats/stats.db"
@@ -65,6 +66,8 @@ def query_summary(params):
     device = str(params.get("device") or "").lower()
     identification, search, application = normalize_filters(
         params.get('identification'), params.get('search'), params.get('application'))
+    trend = 'recent' if params.get('trend') == 'recent' else 'range'
+    minute_trend = trend == 'recent' and not (identification or search or application)
     now = int(time.time())
     # Exactly N hour buckets, including the partial current bucket. Expose
     # actual bounds rather than advertising an exact rolling time window.
@@ -113,6 +116,13 @@ def query_summary(params):
         "total": {"upload": 0, "download": 0, "flows": 0},
         "classification_coverage": empty_classification_coverage(),
         "timeline": [],
+        "trend_mode": trend,
+        "trend_fallback": 'filtered' if trend == 'recent' and not minute_trend else '',
+        "timeline_source": 'device_minutes' if minute_trend else 'hourly',
+        "timeline_resolution_seconds": 60 if minute_trend else 3600,
+        "timeline_range_start": max(0, (now//60-59)*60) if minute_trend else start,
+        "timeline_range_end": now,
+        "minute_history_available": False,
         "devices": [],
         "applications": [],
         "hosts": [],
@@ -205,6 +215,19 @@ def query_summary(params):
         response.update(aggregate(db, start, device, now, classifier, names, latest_ips,
                                   app_page, device_page, sort, direction, expanded, end=end,
                                   identification=identification, search=search, application=application))
+        if minute_trend:
+            # Minute records are a short-lived derivative for this chart only.
+            # Never add them to totals or invent them from aggregated history.
+            # Application/domain filters use the existing classified hour data.
+            minutes = query_series(db, max(0, (now//60-59)*60), now, device=device)
+            response.update(timeline=minutes['timeline'],
+                            timeline_resolution_seconds=60,
+                            timeline_range_start=minutes['range_start'],
+                            timeline_range_end=minutes['range_end'],
+                            minute_history_available=minutes['available'])
+        elif response['timeline']:
+            response['timeline_range_start'] = response['timeline'][0]['bucket']
+            response['timeline_range_end'] = max(now, response['timeline'][-1]['bucket'])
         if has_archive and db.execute('SELECT 1 FROM interface_archive LIMIT 1').fetchone():
             response['history_compacted'] = True
     return response
@@ -214,7 +237,7 @@ def main():
     if len(sys.argv) < 2:
         return 1
     if sys.argv[1] == "list":
-        print(json.dumps({"summary": {"hours": 0, "device": "", "app_page": 0, "device_page": 0, "sort": "", "direction": "", "expanded": "", "identification": "", "search": "", "application": ""}, "set_interface": {"interface": ""}, "set_storage": {"max_storage_mib": 0}, "set_enabled": {"enabled": False}, "check_update": {}, "install_update": {"version": ""}}, separators=(",", ":")))
+        print(json.dumps({"summary": {"hours": 0, "device": "", "app_page": 0, "device_page": 0, "sort": "", "direction": "", "expanded": "", "identification": "", "search": "", "application": "", "trend": ""}, "set_interface": {"interface": ""}, "set_storage": {"max_storage_mib": 0}, "set_enabled": {"enabled": False}, "check_update": {}, "install_update": {"version": ""}}, separators=(",", ":")))
         return 0
     if sys.argv[1] == 'call' and len(sys.argv) >= 3 and sys.argv[2] in ('check_update', 'install_update'):
         try:

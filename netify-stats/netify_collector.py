@@ -17,6 +17,7 @@ from netify_storage import compact_schema, correct_hourly, HourlyWriter, Storage
 from netify_proxy import RedirectMap
 from netify_wan import WanAccounting
 from netify_features import FeatureBridge
+from netify_minute import MinuteSeries
 
 
 SOCKET_PATH = "/var/run/netifyd/netifyd.sock"
@@ -83,6 +84,7 @@ class Collector:
             kind INTEGER NOT NULL, identity TEXT NOT NULL,
             PRIMARY KEY(bucket,interface,kind,identity)) WITHOUT ROWID''')
         self.db.execute('PRAGMA temp.cache_size=-256')
+        self.minutes = MinuteSeries(self.db)
         self.storage = StoragePolicy(self.db, DB_PATH, self.archive_guard)
         self.wan = WanAccounting(self.db, self.proxy)
         self.excluded = set()
@@ -258,6 +260,7 @@ class Collector:
                                     'connection': connection}
             original['proxy_probe'] = None
         self.upload -= candidate.get('pruned_upload', 0)
+        corrected_rows = set()
         for row, (upload, flow_inc) in candidate['entries'].items():
             bucket = row[0]
             duplicate_flow = flow_inc if self.has_seen(bucket, interface, connection) else 0
@@ -266,9 +269,18 @@ class Collector:
             retained = correct_hourly(self.db, row, upload=upload, flows=duplicate_flow)
             if retained:
                 self.mark_seen(bucket, interface, connection)
+                corrected_rows.add(row)
             # Session counters include already-pruned history, so their
             # original duplicate upload still needs correcting either way.
             self.upload -= upload
+        for (bucket, device_id, source_row), upload in candidate.get('minutes', {}).items():
+            # A numeric dictionary ID can be reused after rollback or GC. Only
+            # correct the projection of the original hourly record that was
+            # actually retained and corrected, under its original MAC/IP.
+            if source_row in corrected_rows and self.db.execute(
+                    'SELECT 1 FROM traffic_devices WHERE id=? AND mac=? AND ip=?',
+                    (device_id, source_row[1], source_row[2])).fetchone():
+                self.minutes.correct(bucket, device_id, upload)
 
     def archive_guard(self):
         # A wall-clock jump can make recently received proxy candidates look
@@ -282,6 +294,7 @@ class Collector:
         if not buckets:
             return
         self.writer.clear_cache()
+        self.minutes.prune_hours(buckets)
         for bucket in buckets:
             self.db.execute('DELETE FROM temp.seen_flows WHERE bucket=?', (bucket,))
         self.seen.difference_update(buckets)
@@ -294,6 +307,9 @@ class Collector:
                 if row[0] in buckets:
                     upload, _ = candidate['entries'].pop(row)
                     candidate['pruned_upload'] = candidate.get('pruned_upload', 0) + upload
+            for key in tuple(candidate.get('minutes', {})):
+                if key[0] // 3600 * 3600 in buckets:
+                    candidate['minutes'].pop(key)
 
     @staticmethod
     def seen_identity(identity):
@@ -379,6 +395,7 @@ class Collector:
         if not meta:
             if not retry:
                 self.missing_metadata += 1
+                self.minutes.note_gap(now, 'missing_metadata')
                 self.queue_pending(message, now, upload, download)
             return
         if meta.get('proxy_probe'):
@@ -425,12 +442,14 @@ class Collector:
                            and meta.get('_counted_key') == seen_key
                            and meta.get('_counted_generation') == self.seen_generation)
         flow_inc = 0 if already_counted else int(self.mark_seen(bucket, digest[0], seen_key))
+        minute_candidate = None
         if not redirect and meta.get('proxy_probe'):
             probe = meta['proxy_probe']
             identity = (probe['ip_protocol'], probe['local_ip'], probe['local_port'],
                         probe['other_ip'], probe['other_port'])
             candidate = self.original_candidates.get((digest[0], identity))
             if candidate and candidate['digest'] == digest:
+                minute_candidate = candidate
                 candidate['last'] = time.monotonic()
                 self.original_candidates.move_to_end((digest[0], identity))
                 row = (bucket, meta['mac'], meta['ip'], meta['application'],
@@ -438,7 +457,7 @@ class Collector:
                 previous_upload, previous_flow = candidate['entries'].get(row, (0, 0))
                 candidate['entries'][row] = (previous_upload + upload,
                                              previous_flow + flow_inc)
-        self.writer.write(
+        device_id = self.writer.write(
             (
                 bucket,
                 meta["mac"],
@@ -451,6 +470,21 @@ class Collector:
                 flow_inc,
             ),
         )
+        # The chart receives only the delta already accepted by accounting.
+        # A single numeric row per device/minute is flushed with that same
+        # transaction; it is never added back into the hourly traffic totals.
+        minute_upload = upload
+        if minute_candidate is not None:
+            entries = minute_candidate.setdefault('minutes', {})
+            correction_key = (int(now) // 60 * 60, device_id, row)
+            if correction_key not in entries and len(entries) >= 4:
+                # A normal 60s correction window spans at most three minutes.
+                # Clock jumps must not create unbounded correction state.
+                minute_upload = 0
+                self.minutes.note_gap(now, 'correction_capacity')
+        accepted = self.minutes.add(now, device_id, minute_upload, download)
+        if accepted and minute_candidate is not None and minute_upload:
+            entries[correction_key] = entries.get(correction_key, 0) + minute_upload
         meta['_counted_bucket'], meta['_counted_key'] = bucket, seen_key
         meta['_counted_generation'] = self.seen_generation
         self.events += 1
@@ -462,6 +496,7 @@ class Collector:
 
     def discard_pending(self, item):
         flow = item[1]['flow']
+        self.minutes.note_gap(item[0], 'unattributed_events')
         self.unattributed_upload += max(0, int(flow.get('local_bytes') or 0))
         self.unattributed_download += max(0, int(flow.get('other_bytes') or 0))
 
@@ -523,6 +558,8 @@ class Collector:
             "proxy_error": self.proxy.error,
             "proxy_upload": self.proxy_upload,
             "proxy_download": self.proxy_download,
+            "minute": dict(self.minutes.counters, error=self.minutes.error,
+                           pending_entries=len(self.minutes.pending)),
             "storage": self.storage.status(),
             "upload": self.upload,
             "download": self.download,
@@ -549,7 +586,8 @@ class Collector:
             if self.proxy.want_egress and now_mono-self.proxy.egress_updated >= 30:
                 self.proxy.refresh()
             self.accounting.sample(int(time.time()))
-            self.db.commit()
+            self.minutes.heartbeat(time.time(), self.connected)
+            self.commit_collection()
             try:
                 self.storage.maintain()
             finally:
@@ -562,6 +600,16 @@ class Collector:
                 self.seen_needs_vacuum = self.db.execute('PRAGMA temp.freelist_count').fetchone()[0] > 0
             self.write_status()
             self.last_commit = now_mono
+
+    def commit_collection(self):
+        """Minute projection and accounted hourly records share one commit."""
+        try:
+            self.minutes.flush()
+            self.db.commit()
+        except Exception:
+            self.minutes.reset_pending('collection_commit_failed')
+            self.writer.clear_cache()
+            raise
 
     def handle(self, message):
         msg_type = message.get("type")
@@ -581,6 +629,7 @@ class Collector:
             raise
         client.settimeout(None)
         self.connected = True
+        self.minutes.heartbeat(time.time(), True)
         if getattr(self, 'features', None):
             self.features.connection(True)
         self.last_error = ""
@@ -615,6 +664,8 @@ class Collector:
         try:
             message = json.loads(line)
         except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
+            if getattr(self, 'minutes', None):
+                self.minutes.note_gap(time.time(), 'invalid_messages')
             return
         if not isinstance(message, dict) or set(message.keys()) == {"length"}:
             return
@@ -622,13 +673,19 @@ class Collector:
         if message.get('type') in ('flow', 'flow_stats', 'flow_purge'):
             if not isinstance(message.get('interface', ''), str):
                 self.invalid_messages += 1
+                if getattr(self, 'minutes', None):
+                    self.minutes.note_gap(time.time(), 'invalid_messages')
                 return
             if not isinstance(flow, dict) or not isinstance(flow.get('digest'), str):
                 self.invalid_messages += 1
+                if getattr(self, 'minutes', None):
+                    self.minutes.note_gap(time.time(), 'invalid_messages')
                 return
             if any(flow.get(key) is not None and not isinstance(flow[key], str)
                    for key in ('local_mac', 'other_mac', 'local_ip', 'detected_application_name', 'detected_protocol_name', 'host_server_name', 'dns_host_name', 'other_ip')):
                 self.invalid_messages += 1
+                if getattr(self, 'minutes', None):
+                    self.minutes.note_gap(time.time(), 'invalid_messages')
                 return
         try:
             # Forward once, before accounting transformations. Recovered file
@@ -639,6 +696,8 @@ class Collector:
             self.handle(message)
         except (ValueError, TypeError, OverflowError):
             self.invalid_messages += 1
+            if getattr(self, 'minutes', None):
+                self.minutes.note_gap(time.time(), 'invalid_messages')
 
     def run(self):
         try:
@@ -654,15 +713,17 @@ class Collector:
                 self.connect_and_read()
             except Exception as exc:
                 self.connected = False
+                self.minutes.heartbeat(time.time(), False)
                 if getattr(self, 'features', None):
                     self.features.connection(False)
                 self.last_error = str(exc)
-                self.db.commit()
+                self.commit_collection()
                 self.write_status()
                 if self.running:
                     self.maintenance()
                     time.sleep(2)
-        self.db.commit()
+        self.minutes.heartbeat(time.time(), self.connected)
+        self.commit_collection()
         self.connected = False
         self.write_status()
         self.db.close()

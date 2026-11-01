@@ -108,6 +108,7 @@ class RpcTests(unittest.TestCase):
         result = rpc.status(now=1000)
         self.assertFalse(result['settings']['enabled'])
         self.assertTrue(result['stale'])
+        self.assertEqual(result['runtime_error'], '')
         self.assertEqual(list(self.root.iterdir()), [])
         self.write('status.json', self.snapshot)
         self.write('collector.json', {'timestamp': 999, 'connected': True})
@@ -129,6 +130,43 @@ class RpcTests(unittest.TestCase):
         self.assertFalse(self.call('configure', {'settings': {'enabled': 'yes'}})['ok'])
         self.assertFalse(self.call('configure', {'settings': {}, 'command': 'reboot'})['ok'])
         self.assertTrue(config.load(rpc.CONFIG_PATH)['enabled'])
+
+    def test_http_rpc_session_is_transport_metadata_for_all_three_methods(self):
+        # uhttpd injects this field after session.access; rpcd serializes the
+        # entire ubus message as plugin stdin. Exercise main(), not just the
+        # Python handlers that previously missed the browser request shape.
+        transport = {'ubus_rpc_session': '0123456789abcdef0123456789ABCDEF'}
+        self.write('status.json', self.snapshot)
+        self.write('collector.json', {'timestamp': 999, 'connected': True})
+        with mock.patch.object(rpc.time, 'time', return_value=1000):
+            status = self.call('status', transport)
+            self.assertNotIn('error', status)
+            self.assertTrue(status['collector_recent'])
+            self.assertFalse(status['stale'])
+            changed = self.call('configure', dict(transport, settings={'enabled': True, 'mode': 'auto'}))
+            self.assertTrue(changed['ok'])
+            self.assertTrue(config.load(rpc.CONFIG_PATH)['enabled'])
+            self.assertNotIn('ubus_rpc_session', config.load(rpc.CONFIG_PATH))
+            released = self.call('release', dict(transport, id=self.id))
+            self.assertTrue(released['ok'])
+            self.assertEqual(rpc.read_object(rpc.RELEASE_PATH)['id'], self.id)
+            self.assertNotIn('ubus_rpc_session', rpc.read_object(rpc.RELEASE_PATH))
+
+    def test_transport_exception_never_allows_other_or_malformed_parameters(self):
+        for invalid in (None, True, 123, [], {}, '', 'a' * 31, 'a' * 33, 'z' * 32):
+            with self.subTest(session=invalid):
+                result = self.call('status', {'ubus_rpc_session': invalid})
+                self.assertFalse(result['ok'])
+                self.assertEqual(result['error'], 'Invalid RPC session metadata.')
+        transport = {'ubus_rpc_session': 'a' * 32}
+        for method, params in (
+                ('status', {'settings': {}}),
+                ('configure', {'settings': {}, 'command': 'reboot'}),
+                ('release', {'id': self.id, 'settings': {}})):
+            with self.subTest(method=method):
+                self.assertFalse(self.call(method, dict(transport, **params))['ok'])
+        self.assertFalse(self.call('configure', dict(transport, settings=transport))['ok'])
+        self.assertEqual(list(self.root.iterdir()), [])
 
     def test_bad_status_and_config_are_visible(self):
         self.write('config.json', {'mode': 'oops'})

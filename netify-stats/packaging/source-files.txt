@@ -77,3 +77,6 @@ test_anti_pcdn_runtime.py
 test_anti_pcdn_ui.cjs
 check_anti_pcdn_kernel.py
 bench_anti_pcdn.py
+netify_minute.py
+test_minutes.py
+test_minute_query.py

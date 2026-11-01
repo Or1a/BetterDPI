@@ -17,7 +17,7 @@ const data={...base(),device_choices:devices,applications:[app],app_count:1,inte
  view.appPage=5;view.devicePage=3;view.expandedApps.add(app.id);
  view.identificationSelect.value='protocol';
  await view.identificationSelect.attrs.change();
- assert.deepEqual(queries.at(-1).slice(2),[1,1,'total','desc','[]','protocol','','']);
+ assert.deepEqual(queries.at(-1).slice(2),[1,1,'total','desc','[]','protocol','','','recent']);
  assert(root.querySelector('.ns-result-scope'));
  assert.equal(root.querySelector('.ns-history-selector'),null); // Interface bytes never masquerade as filtered application traffic.
  const input=view.searchInput;

@@ -5,7 +5,7 @@
 'require poll';
 
 var PAGE_SIZE = 10;
-var callSummary = rpc.declare({ object: 'netify-stats', method: 'summary', params: [ 'hours', 'device', 'app_page', 'device_page', 'sort', 'direction', 'expanded', 'identification', 'search', 'application' ], expect: { } });
+var callSummary = rpc.declare({ object: 'netify-stats', method: 'summary', params: [ 'hours', 'device', 'app_page', 'device_page', 'sort', 'direction', 'expanded', 'identification', 'search', 'application', 'trend' ], expect: { } });
 var setStorage = rpc.declare({ object: 'netify-stats', method: 'set_storage', params: [ 'max_storage_mib' ], expect: { } });
 var setEnabled = rpc.declare({ object: 'netify-stats', method: 'set_enabled', params: [ 'enabled' ], expect: { } });
 var setInterface = rpc.declare({ object: 'netify-stats', method: 'set_interface', params: [ 'interface' ], expect: { } });
@@ -469,41 +469,42 @@ function timeline(items, step, selection, clockAnomaly) {
 	var peak = items.reduce(function(value, item) { return Math.max(value, Number(item.download || 0), Number(item.upload || 0)); }, 1);
 	var magnitude = Math.pow(10, Math.floor(Math.log10(peak))), max = Math.ceil(peak / magnitude) * magnitude;
 	var selected = E('p', { 'class': 'ns-range ns-trend-selection', 'aria-live': 'polite' });
+	function missing(item) { return item.covered === false || item.coverage === 'missing'; }
 	function description(item) {
 		var start = new Date(item.bucket * 1000), end = new Date(clockAnomaly ? (item.bucket + step)*1000 : Math.max(item.bucket*1000, Math.min((item.bucket + step)*1000, Date.now())));
-		return displayDate(start) + ' — ' + displayDate(end) + ' ｜ ' + _("Download %s · Upload %s").format(bytes(item.download), bytes(item.upload));
+		var details = missing(item) ? _("No observation") : _("Download %s · Upload %s").format(bytes(item.download), bytes(item.upload));
+		if (!missing(item) && item.coverage === 'partial') details += ' · ' + _("Partial observation");
+		return displayDate(start) + ' — ' + displayDate(end) + ' ｜ ' + details;
 	}
 	var selectedItem = selection && items.find(function(item) { return item.bucket === selection.bucket; });
 	if (selection && !selectedItem) selection.bucket = null;
 	dom.content(selected, description(selectedItem || items[items.length-1]));
-	function svgNode(tag, attrs) {
-		var node = document.createElementNS('http://www.w3.org/2000/svg', tag);
-		Object.keys(attrs).forEach(function(key) { node.setAttribute(key, attrs[key]); });
-		return node;
-	}
-	var svg = svgNode('svg', { 'class': 'ns-trend-lines', 'viewBox': '0 0 1000 190', 'preserveAspectRatio': 'none', 'aria-hidden': 'true' });
-	['download', 'upload'].forEach(function(key) {
-		var color = key === 'download' ? '#4d9de0' : '#ee7a59';
-		var points = items.map(function(item, index) { return [((index+0.5)/items.length*1000).toFixed(2), (185-Number(item[key]||0)/max*180).toFixed(2)]; });
-		svg.appendChild(svgNode('polyline', { 'points': points.map(function(point) { return point.join(','); }).join(' '), 'fill': 'none', 'stroke': color, 'stroke-width': '2', 'vector-effect': 'non-scaling-stroke', 'stroke-linejoin': 'round' }));
-		if (items.length === 1) svg.appendChild(svgNode('circle', { 'cx':points[0][0], 'cy':points[0][1], 'r':'3', 'fill':color, 'stroke':color, 'vector-effect':'non-scaling-stroke' }));
-	});
+	// Keep each direction visible at minute resolution instead of compressing
+	// dozens of columns into subpixel widths on a phone. Horizontal position is
+	// preserved by the existing dashboard refresh mechanism.
+	var minWidth = Math.max(240, items.length * 12);
+	var labelEvery = Math.max(1, Math.ceil(60 / (minWidth / items.length)));
 	return E('div', {}, [
 		E('div', { 'class': 'ns-trend-chart' }, [
 			E('div', { 'class': 'ns-trend-axis', 'aria-hidden': 'true' }, [ E('span', {}, bytes(max)), E('span', {}, bytes(max/2)), E('span', {}, '0 B') ]),
-			E('div', { 'class': 'ns-trend-plot' }, [svg].concat(items.map(function(item, index) {
-				var date = new Date(item.bucket * 1000), label = date.getMonth()+1 + '/' + date.getDate() + '\n' + String(date.getHours()).padStart(2,'0') + ':00';
-				var showLabel = index % Math.max(1, Math.ceil(items.length/4)) === 0;
-				return E('button', { 'type': 'button', 'class': 'ns-trend-group', 'title': description(item), 'aria-label': description(item), 'click': function() { if (selection) selection.bucket = item.bucket; dom.content(selected, description(item)); } }, [
-					E('small', { 'class': 'ns-trend-label' }, showLabel ? label : '')
-				]);
-			})))
+			E('div', { 'class': 'ns-trend-scroll', 'data-ns-scroll': 'traffic-trend' }, [
+				E('div', { 'class': 'ns-trend-plot', 'style': 'min-width:' + minWidth + 'px' }, items.map(function(item, index) {
+					var date = new Date(item.bucket * 1000), label = date.getMonth()+1 + '/' + date.getDate() + '\n' + String(date.getHours()).padStart(2,'0') + ':' + String(date.getMinutes()).padStart(2,'0');
+					var showLabel = index % labelEvery === 0 && (index === 0 || items.length - index >= labelEvery);
+					return E('button', { 'type': 'button', 'class': 'ns-trend-group' + (missing(item) ? ' ns-trend-missing' : item.coverage === 'partial' ? ' ns-trend-partial' : ''), 'title': description(item), 'aria-label': description(item), 'click': function() { if (selection) selection.bucket = item.bucket; dom.content(selected, description(item)); } }, [
+						E('span', { 'class': 'ns-trend-bars', 'aria-hidden': 'true' }, missing(item) ? [E('span', { 'class': 'ns-trend-gap' }, '—')] : [
+							E('span', { 'class': 'ns-trend-down', 'style': 'height:' + (Number(item.download || 0) / max * 100) + '%' }),
+							E('span', { 'class': 'ns-trend-up', 'style': 'height:' + (Number(item.upload || 0) / max * 100) + '%' })
+						]), E('small', { 'class': 'ns-trend-label' }, showLabel ? label : '')
+					]);
+				}))
+			])
 		]), selected
 	]);
 }
 
 return view.extend({
-	load: function() { return callSummary(0, '', 1, 1, 'total', 'desc', '[]', '', '', ''); },
+	load: function() { return callSummary(0, '', 1, 1, 'total', 'desc', '[]', '', '', '', 'recent'); },
 
 	currentSort: function() { return { key: this.sortSelect && this.sortSelect.value || 'total', direction: this.orderSelect && this.orderSelect.value || 'desc' }; },
 
@@ -675,6 +676,36 @@ return view.extend({
 		]);
 	},
 
+	trendPanel: function(data) {
+		var recent = (this.trendMode || 'recent') === 'recent';
+		var selector = E('select', { 'id': 'ns-trend-window', 'change': L.bind(function(ev) {
+			this.trendMode = ev.target.value === 'range' ? 'range' : 'recent';
+			this.trendSelection = { bucket: null };
+			return this.refresh();
+		}, this) }, [
+			E('option', { 'value': 'recent', 'selected': recent ? '' : null }, _("Recent 60 minutes")),
+			E('option', { 'value': 'range', 'selected': recent ? null : '' }, _("Selected time range"))
+		]);
+		var notices = [];
+		if (data.timeline_source === 'device_minutes') {
+			if (Number.isFinite(data.timeline_range_start) && Number.isFinite(data.timeline_range_end))
+				notices.push(E('p', { 'class': 'ns-range ns-trend-scope' }, _("Chart window: %s to %s. Totals and rankings use the time range selected above.").format(displayDate(new Date(data.timeline_range_start * 1000)), displayDate(new Date(data.timeline_range_end * 1000)))));
+			if (data.minute_history_available === false)
+				notices.push(E('p', { 'class': 'ns-range ns-minute-history' }, _("No minute history yet. New observations will appear here; earlier minutes cannot be reconstructed.")));
+			else if ((data.timeline || []).some(function(item) { return item.covered === false || item.coverage === 'missing' || item.coverage === 'partial'; }))
+				notices.push(E('p', { 'class': 'ns-range ns-minute-coverage' }, _("Some minutes have incomplete collection. Gaps are unknown traffic, not zero.")));
+		} else if (data.trend_fallback === 'filtered') {
+			notices.push(E('p', { 'class': 'ns-range ns-trend-fallback' }, _("Application and traffic filters use hourly bars for the selected time range.")));
+		}
+		return E('section', { 'class': 'ns-section ns-trend-section' }, [
+			E('div', { 'class': 'ns-section-head ns-trend-heading' }, [
+				E('h3', {}, _("Device traffic trend")),
+				E('label', { 'class': 'ns-trend-control' }, [_("Chart window") + ' ', selector]),
+				E('div', { 'class': 'ns-legend' }, [E('span', { 'class': 'download' }, _("Download")), E('span', { 'class': 'upload' }, _("Upload"))])
+			])
+		].concat(notices, [timeline(data.timeline, data.timeline_resolution_seconds, this.trendSelection, data.clock_anomaly)]));
+	},
+
 	renderDashboard: function(data) {
 		data = data || {};
 		var total = data.total || {}, order = this.currentSort();
@@ -691,7 +722,7 @@ return view.extend({
 			data.history_compacted ? E('p', { 'class': 'ns-archive-notice' }, _("Old data is kept as cumulative device, application and protocol totals, without daily records. All includes these totals; recent ranges, trends and domain searches cover retained details only.")) : E('span'),
 			data.archive_included ? E('p', { 'class': 'ns-archive-totals' }, _("Historical totals included in these results: download %s, upload %s.").format(bytes(data.archived_total && data.archived_total.download), bytes(data.archived_total && data.archived_total.upload))) : E('span'),
 			filtered ? E('p', { 'class': 'ns-result-scope' }, _("Results follow the selected filters. Matching an application name includes its traffic; matching only a domain includes only that domain's records.")) : E('span'),
-			E('section', { 'class': 'ns-section ns-trend-section' }, [ E('div', { 'class': 'ns-section-head' }, [ E('h3', {}, _("Device traffic trend")), E('div', { 'class': 'ns-legend' }, [ E('span', { 'class': 'download' }, _("Download")), E('span', { 'class': 'upload' }, _("Upload")) ]) ]), timeline(data.timeline, data.timeline_resolution_seconds, this.trendSelection, data.clock_anomaly) ]),
+			this.trendPanel(data),
 			data.config_error ? E('p', { 'class': 'ns-config-error', 'role': 'alert' }, _("Settings are invalid. Historical data is still available. %s").format(errorMessage(data.config_error))) : E('span'),
 			data.clock_anomaly ? E('p', { 'class': 'ns-clock-warning', 'role': 'alert' }, _("Some records are ahead of the system clock. All history includes them; recent time ranges exclude future hours.")) : E('span'),
 			order.key === 'flows' ? E('p', { 'class': 'ns-flow-definition' }, _("A connection active in multiple hours is counted once per hour.")) : E('span'),
@@ -734,7 +765,7 @@ return view.extend({
 		var order = this.currentSort();
 		var visible = new Set((this.currentData && this.currentData.applications || []).map(function(item) { return item.id; }));
 		var expanded = Array.from(this.expandedApps || []).filter(function(id) { return visible.has(id); });
-		var args = [hours, device, this.appPage || 1, this.devicePage || 1, order.key, order.direction, JSON.stringify(expanded), this.identificationSelect && this.identificationSelect.value || '', this.searchTerm || '', this.applicationFilter || ''], key = JSON.stringify(args);
+		var args = [hours, device, this.appPage || 1, this.devicePage || 1, order.key, order.direction, JSON.stringify(expanded), this.identificationSelect && this.identificationSelect.value || '', this.searchTerm || '', this.applicationFilter || '', this.trendMode || 'recent'], key = JSON.stringify(args);
 		// Polls and repeated clicks share the same in-flight query. If filters
 		// change, wait for it and run only the latest requested combination.
 		// A successful settings write forces a fresh query after older reads.
@@ -849,23 +880,28 @@ return view.extend({
 .ns-root .ns-legend>span:before { display:block; flex:0 0 8px; width:8px; height:8px; margin:0!important; }
 .ns-root .ns-stats { grid-template-columns:repeat(2,minmax(0,1fr)); }
 .ns-root .ns-lower-grid { grid-template-columns:minmax(0,1fr); }
-.ns-root .ns-trend-lines { position:absolute; top:0; left:0; width:100%; height:190px; pointer-events:none; overflow:visible; }
 .ns-root input.ns-switch { appearance:none!important; -webkit-appearance:none!important; position:relative; width:44px!important; min-width:44px; height:26px!important; padding:0!important; border:0!important; border-radius:16px; background:#888!important; cursor:pointer; }
 .ns-root input.ns-switch:before { content:''; position:absolute; width:20px; height:20px; top:3px; left:3px; border-radius:50%; background:#fff; transition:transform .15s; }
 .ns-root input.ns-switch:checked { background:#4d9de0!important; }
 .ns-root input.ns-switch:checked:before { transform:translateX(18px); }
 .ns-root input.ns-switch:disabled { opacity:.5; cursor:wait; }
 .ns-root input.ns-switch:focus-visible { outline:2px solid #4d9de0; outline-offset:3px; }
-.ns-root .ns-trend-chart { display:flex; gap:8px; height:220px; margin:18px 0 8px; }
-.ns-root .ns-trend-axis { flex:0 0 60px; display:flex; flex-direction:column; justify-content:space-between; padding-bottom:30px; font-size:11px; text-align:right; }
-.ns-root .ns-trend-plot { position:relative; display:flex; flex:1; min-width:0; gap:0; padding-bottom:30px; background:repeating-linear-gradient(to top,transparent 0,transparent calc(50% - 1px),rgba(127,127,127,.18) calc(50% - 1px),rgba(127,127,127,.18) 50%); background-size:100% 190px; background-repeat:no-repeat; }
-.ns-root button.ns-trend-group { position:relative; flex:1; min-width:0!important; width:auto!important; height:190px!important; min-height:0!important; padding:0!important; margin:0!important; border:0!important; border-radius:0!important; background:transparent!important; color:inherit!important; box-shadow:none!important; cursor:pointer; overflow:visible!important; }
+.ns-root .ns-trend-chart { display:flex; gap:8px; height:240px; margin:18px 0 8px; }
+.ns-root .ns-trend-heading { flex-wrap:wrap; }
+.ns-root .ns-trend-control { display:flex; align-items:center; gap:6px; font-size:12px; }
+.ns-root .ns-trend-control select { width:auto; min-width:150px; }
+.ns-root .ns-trend-axis { flex:0 0 60px; height:190px; display:flex; flex-direction:column; justify-content:space-between; font-size:11px; text-align:right; }
+.ns-root .ns-trend-scroll { flex:1; min-width:0; overflow-x:auto; overflow-y:hidden; }
+.ns-root .ns-trend-plot { position:relative; display:flex; width:100%; height:220px; gap:0; background:repeating-linear-gradient(to top,transparent 0,transparent calc(50% - 1px),rgba(127,127,127,.18) calc(50% - 1px),rgba(127,127,127,.18) 50%); background-size:100% 190px; background-repeat:no-repeat; }
+.ns-root button.ns-trend-group { position:relative; display:block!important; flex:1; min-width:12px!important; width:auto!important; height:190px!important; min-height:0!important; padding:0 1px!important; margin:0!important; border:0!important; border-radius:0!important; background:transparent!important; color:inherit!important; box-shadow:none!important; cursor:pointer; overflow:visible!important; }
 .ns-root button.ns-trend-group:focus-visible { outline:2px solid #4d9de0!important; }
-.ns-root .ns-trend-bars { height:100%; display:flex; align-items:flex-end; gap:1px; }
+.ns-root .ns-trend-bars { height:100%; display:flex; align-items:flex-end; gap:1px; padding-top:2px; }
 .ns-root .ns-trend-down,.ns-root .ns-trend-up { display:block; flex:1; min-height:0; border-radius:2px 2px 0 0; }
 .ns-root .ns-trend-down { background:#4d9de0; }
 .ns-root .ns-trend-up { background:#ee7a59; }
-.ns-root .ns-trend-label { position:absolute; top:100%; left:0; width:42px; text-align:left; font-size:9px; line-height:1.2; white-space:pre-line; padding-top:6px; }
+.ns-root .ns-trend-partial .ns-trend-bars { opacity:.65; }
+.ns-root .ns-trend-gap { display:block; width:100%; text-align:center; font-size:11px; opacity:.65; }
+.ns-root .ns-trend-label { position:absolute; top:100%; left:0; width:58px; text-align:left; font-size:9px; line-height:1.2; white-space:pre-line; padding-top:6px; }
 .ns-root .ns-trend-selection { min-height:3em; overflow-wrap:anywhere; }
 .ns-root *, .ns-root *:before, .ns-root *:after { box-sizing:border-box; }
 .ns-root .ns-stat, .ns-root .ns-section { background:transparent; color:inherit; min-width:0; }

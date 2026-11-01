@@ -57,7 +57,9 @@ def status(now=None):
         result['runtime'] = read_object(STATUS_PATH)
         result['stale'] = not fresh(result['runtime'], now)
     except FileNotFoundError:
-        result['runtime_error'] = 'No Anti-PCDN runtime status is available.'
+        # Disabled features never create a worker or status file. The absent
+        # snapshot is still stale, but is not by itself an operating error.
+        pass
     except (OSError, ValueError, TypeError, RecursionError) as exc:
         result['runtime_error'] = str(exc)
     try:
@@ -129,7 +131,18 @@ def main():
             raise ValueError('Request exceeds the size limit.')
         params = json.loads(raw or '{}')
         method = sys.argv[2]
-        if not isinstance(params, dict) or set(params) - set(METHODS[method]):
+        if not isinstance(params, dict):
+            raise ValueError('Invalid method parameters.')
+        # uhttpd validates access and injects this reserved transport field;
+        # rpcd forwards the complete JSON object to executable plugins. It is
+        # not a feature setting or an authorization decision for this process.
+        # Direct local ubus calls may omit it. Reject malformed metadata and
+        # every other unexpected key rather than loosening method validation.
+        if 'ubus_rpc_session' in params:
+            session = params.pop('ubus_rpc_session')
+            if not isinstance(session, str) or re.fullmatch(r'[0-9a-fA-F]{32}', session) is None:
+                raise ValueError('Invalid RPC session metadata.')
+        if set(params) - set(METHODS[method]):
             raise ValueError('Invalid method parameters.')
         if method == 'status':
             result = status()
