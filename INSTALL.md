@@ -13,7 +13,7 @@ Netify 的 LAN 接口、本地 socket 和 JSON 导出仍需按 [README](README.m
 
 ## V0.4.1 试用版
 
-V0.4.1 修复 Anti-PCDN 页面的会话参数兼容问题，并新增设备分钟柱状趋势图。此版本按 **Pre-release** 准备，官方 SDK 构建及下载附件校验尚待本次流水线完成，以 [V0.4.1 发布页](https://github.com/Or1a/BetterDPI/releases/tag/V0.4.1)实际生成的附件为准。稳定版仍为 V0.3.2；应用内更新和下文的 `releases/latest` 地址不会自动提供试用版。
+V0.4.1 修复 Anti-PCDN 页面的会话参数兼容问题，并新增设备分钟柱状趋势图，已按 **Pre-release** 发布。两个官方 SDK 构建、下载附件与源码核对及包内只读 RPC 检查均已通过，可从 [V0.4.1 发布页](https://github.com/Or1a/BetterDPI/releases/tag/V0.4.1)下载；[验证记录](docs/minute-trend.md#试用发布校验)保留真机验证范围的限制。稳定版仍为 V0.3.2；应用内更新和下文的 `releases/latest` 地址不会自动提供试用版。
 
 | OpenWrt | 试用包固定文件名及下载链接 |
 | --- | --- |

@@ -12,7 +12,7 @@ V0.3.2 新增 WAN 独立分项账、设备侧 VPN 子集和隧道接口计数，
 
 V0.4.1 修复 Anti-PCDN 页面因 LuCI 会话参数被拒绝而无法读取状态、保存设置或解除规则的问题；读取失败时明确显示未知状态，不再把默认值当作采集器的实际状态。同时新增真实设备分钟记录，趋势图默认显示最近 60 分钟的上传／下载并列柱状图。图表时间范围独立于总量和排行榜，详见[分钟趋势说明](docs/minute-trend.md)。
 
-本版按 GitHub **预发布（Pre-release）**准备，两个官方 SDK 构建和附件校验尚待本次流水线完成，下载以 [V0.4.1 发布页](https://github.com/Or1a/BetterDPI/releases/tag/V0.4.1)实际生成的附件为准。稳定版仍为 V0.3.2，`releases/latest` 与应用内更新不会自动切换到试用版。
+V0.4.1 已按 GitHub **预发布（Pre-release）**提供下载。两个官方 SDK 构建、下载附件与标签源码核对，以及包内只读 RPC 检查均已通过，见 [V0.4.1 发布页](https://github.com/Or1a/BetterDPI/releases/tag/V0.4.1)和[验证记录](docs/minute-trend.md#试用发布校验)。稳定版仍为 V0.3.2，`releases/latest` 与应用内更新不会自动切换到试用版。
 
 | OpenWrt | V0.4.1 试用包 |
 | --- | --- |
@@ -23,7 +23,7 @@ V0.4.0 用户也需手动下载同一发布页的包和 `SHA256SUMS`，按[试�
 
 Anti-PCDN 仍默认关闭。首次试用可打开 **状态 → Anti-PCDN**，选择实际 LAN 接口并开启「仅观察」；保持 DPI 采集运行，等待至少 5 分钟后检查评分、缺失计数和白名单。如需自动处置，再选择「自动封禁」；初始参数为 **80 分、120 秒**，还须通过连接身份和执行路径检查。试用参数尚未经过真实业务准确率校准。
 
-V0.4.1 fixes LuCI session-parameter handling and adds real device-minute history with paired upload/download bars. Trial packages will appear at the tag-specific links after the release workflow completes. V0.4.0 users should upgrade manually; stable downloads and the in-app updater remain on V0.3.2. Anti-PCDN remains disabled by default.
+V0.4.1 fixes LuCI session-parameter handling and adds real device-minute history with paired upload/download bars. Trial packages are available at the tag-specific links above. Both official SDK builds, downloaded package contents and read-only packaged RPC checks passed; real-router validation remains pending. V0.4.0 users should upgrade manually; stable downloads and the in-app updater remain on V0.3.2. Anti-PCDN remains disabled by default.
 
 ## Features
 
