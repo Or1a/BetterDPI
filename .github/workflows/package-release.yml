@@ -106,6 +106,7 @@ jobs:
           cd release
           sha256sum BetterDPI-* update.json > SHA256SUMS
           gh release create "${GITHUB_REF_NAME}" BetterDPI-* update.json SHA256SUMS \
+            --prerelease \
             --title "${GITHUB_REF_NAME}" \
             --notes-file "$GITHUB_WORKSPACE/RELEASE-NOTES.md"
           assets=$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name')

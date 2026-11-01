@@ -6,7 +6,20 @@ BetterDPI 是用于 OpenWrt 的本地流量分析 LuCI 插件，通过 Netify �
 
 V0.3.2 新增 WAN 独立分项账、设备侧 VPN 子集和隧道接口计数，明确防止 LAN/WAN/隧道重复相加，并显示带符号差额及采集缺口。仍保留 7 天明细、更早数据累计，继续使用 `/tmp`。
 
-`feature/anti-pcdn` 分支另提供默认关闭的实验性 Anti-PCDN：独立页面、短期行为评分、白名单和有期限的连接级自动封禁，复用当前 Netify 采集。尚未包含在 V0.3.2 下载包；使用条件、阈值及限制见 [Anti-PCDN 说明](docs/anti-pcdn-design.md)。
+主线源码新增默认关闭的实验性 Anti-PCDN：独立页面、短期行为评分、白名单和有期限的连接级自动封禁，复用当前 Netify 采集。使用条件、阈值及限制见 [Anti-PCDN 说明](docs/anti-pcdn-design.md)。
+
+## V0.4.0 试用版 / Trial release
+
+V0.4.0 按 GitHub **预发布（Pre-release）**准备，以下下载链接在发布流水线成功后生效；构建状态与附件以 [V0.4.0 发布页](https://github.com/Or1a/BetterDPI/releases/tag/V0.4.0)为准。稳定版仍为 V0.3.2，`releases/latest` 与应用内更新不会自动切换到试用版。
+
+| OpenWrt | V0.4.0 试用包 |
+| --- | --- |
+| 24.10（IPK） | [BetterDPI-openwrt-24.10-all.ipk](https://github.com/Or1a/BetterDPI/releases/download/V0.4.0/BetterDPI-openwrt-24.10-all.ipk) |
+| 25.12（APK） | [BetterDPI-openwrt-25.12-all.apk](https://github.com/Or1a/BetterDPI/releases/download/V0.4.0/BetterDPI-openwrt-25.12-all.apk) |
+
+下载后用同一发布页的 `SHA256SUMS` 校验，按[试用版安装说明](INSTALL.md#v040-试用版)覆盖安装，无需先卸载。首次试用可打开 **状态 → Anti-PCDN**，选择实际 LAN 接口并开启「仅观察」；保持 DPI 采集运行，等待至少 5 分钟后检查评分、缺失计数和白名单。如需自动处置，再选择「自动封禁」；初始参数为 **80 分、120 秒**，还须通过连接身份和执行路径检查。功能默认关闭，试用参数尚未经过真实业务准确率校准。
+
+V0.4.0 is an opt-in prerelease with Anti-PCDN disabled by default. Use the tag-specific packages above after the release workflow completes; stable downloads and the in-app updater remain on V0.3.2. Open **Status → Anti-PCDN**, start with **Observe only**, then optionally select automatic blocking after reviewing the scores and allowlists.
 
 ## Features
 
@@ -40,9 +53,9 @@ V0.3.2 新增 WAN 独立分项账、设备侧 VPN 子集和隧道接口计数，
 - 查看采集状态与排查建议，区分应用未识别和未能计入设备统计的流量。
 - 在页面手动检查 GitHub 新版本，确认后校验、安装，并查看升级结果。
 
-The [V0.3.2 release](https://github.com/Or1a/BetterDPI/releases/tag/V0.3.2) includes these changes. V0.3.0 / V0.3.1 users can use the update button; earlier installations need one manual upgrade. Both packages were built with their matching official SDK and verified against the tagged source; router upgrade and long-term validation remain pending.
+The stable [V0.3.2 release](https://github.com/Or1a/BetterDPI/releases/tag/V0.3.2) includes the traffic-analysis features listed above. V0.3.0 / V0.3.1 users can use the update button; earlier installations need one manual upgrade. Both stable packages were built with their matching official SDK and verified against the tagged source; router upgrade and long-term validation remain pending.
 
-上述变更已纳入 [V0.3.2 Release](https://github.com/Or1a/BetterDPI/releases/tag/V0.3.2)。V0.3.0 / V0.3.1 可通过页面升级，更早版本先手动覆盖安装一次。两种包均已由对应官方 SDK 构建，发布附件已核对通过；真实路由器升级与长期验证仍待完成。
+上述流量分析功能已纳入稳定版 [V0.3.2 Release](https://github.com/Or1a/BetterDPI/releases/tag/V0.3.2)。V0.3.0 / V0.3.1 可通过页面升级，更早版本先手动覆盖安装一次。两种稳定版包均已由对应官方 SDK 构建，发布附件已核对通过；真实路由器升级与长期验证仍待完成。
 
 Fixed download filenames and an in-app update manifest are available. See the [GitHub installation guide](INSTALL.md) for direct IPK installation, APK download-and-install, and checksum verification.
 
@@ -50,7 +63,7 @@ Fixed download filenames and an in-app update manifest are available. See the [G
 
 ## Command-line download
 
-Run the command matching your router's OpenWrt version. It downloads the package to `/tmp` and verifies its SHA-256 checksum; it does not install anything.
+These commands download the stable V0.3.2 packages. Run the command matching your router's OpenWrt version. It downloads the package to `/tmp` and verifies its SHA-256 checksum; it does not install anything. For the V0.4.0 trial, use the tag-specific links above and the [trial installation steps](INSTALL.md#v040-试用版).
 
 OpenWrt 24.10.8 (IPK):
 
@@ -66,7 +79,7 @@ wget -O /tmp/BetterDPI-0.3.2-openwrt-25.12.5-all.apk 'https://github.com/Or1a/Be
 
 ## 命令行下载
 
-在对应版本的 OpenWrt 路由器上运行上方的一条命令。安装包会下载到 `/tmp` 并校验 SHA-256；命令不会自动安装。
+上方命令用于稳定版 V0.3.2。在对应版本的 OpenWrt 路由器上运行一条命令，安装包会下载到 `/tmp` 并校验 SHA-256；命令不会自动安装。V0.4.0 请使用前面的试用链接及[对应安装步骤](INSTALL.md#v040-试用版)。
 
 ## Installation
 

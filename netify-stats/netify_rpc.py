@@ -15,7 +15,7 @@ from netify_accounting import interface_choices, save_interface, split_interface
 from netify_update import read_status, start_check, start_install
 from netify_wan import query_wan
 
-VERSION = "0.3.2"
+VERSION = "0.4.0"
 
 
 DB_PATH = "/tmp/netify-stats/stats.db"
