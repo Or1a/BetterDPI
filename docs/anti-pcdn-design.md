@@ -1,6 +1,6 @@
 # BetterDPI Anti-PCDN 实验功能
 
-日期：2026-11-01。本功能纳入主线源码，并准备作为 **V0.4.0 预发布试用版**提供；不是 V0.3.2 稳定包的一部分。试用附件以 [V0.4.0 发布页](https://github.com/Or1a/BetterDPI/releases/tag/V0.4.0)的流水线结果为准，安装步骤见 [试用版说明](../INSTALL.md#v040-试用版)。外部项目和效果证据见 [项目调研](anti-pcdn-research.md)。
+日期：2026-11-01。本功能已合并主线并发布为 **V0.4.0 预发布试用版**；不是 V0.3.2 稳定包的一部分。两个官方 SDK 包已构建并核对，下载见 [V0.4.0 发布页](https://github.com/Or1a/BetterDPI/releases/tag/V0.4.0)，安装步骤见 [试用版说明](../INSTALL.md#v040-试用版)。外部项目和效果证据见 [项目调研](anti-pcdn-research.md)。
 
 ## 使用方式和边界
 

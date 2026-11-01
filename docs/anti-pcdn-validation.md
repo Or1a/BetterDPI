@@ -190,3 +190,30 @@ launcher always creates isolated namespaces; before network writes the worker
 verifies a live-parent pipe handshake, changed user/network namespaces and a
 fresh network. There is no host-firewall fallback if isolation fails. Normal
 unit tests and the benchmark never install kernel rules.
+
+## V0.4.0 trial package publication
+
+On 2026-11-01, [release workflow 41261234399](https://github.com/Or1a/BetterDPI/actions/runs/41261234399)
+completed both official SDK builds and published V0.4.0 as a prerelease from
+commit `f534d127fa86045c454433ce2a591965b34c0d7f`. The release preparation run
+passed all 243 Python tests and ten Node suites. The stable `releases/latest`
+page was separately confirmed to remain on V0.3.2.
+
+All six published assets were downloaded. SHA256SUMS, fixed-name aliases and
+the version/size/hash entries in update.json agree. Both packages contain the
+exact 35 runtime files from the tagged manifest, with matching bytes, modes and
+root ownership. The IPK has no additional payload files; the APK adds only the
+official SDK package file list. APK scripts were checked against the complete
+OpenWrt v25.12.5 wrapper template and the tagged custom hooks, including the
+post-upgrade hook. Configuration defaults remain disabled, observation mode,
+threshold 80 and lease duration 120 seconds. Packages were inspected without
+installing them or running lifecycle scripts on the development host.
+
+| Package | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `BetterDPI-0.4.0-openwrt-24.10.8-all.ipk` | 275348 | `ecc99e6c4267578f9fab69c3c383be66dcdb71d8b9cb963368cf1eddef7d8ef5` |
+| `BetterDPI-0.4.0-openwrt-25.12.5-all.apk` | 272803 | `f2771a2461ce6070dddc0467ecaefe15f497e8cf45e2d30d036cfd66f395c00c` |
+
+This verifies downloadable package construction and contents. Actual router
+upgrade/restart behavior, workload accuracy and device resource costs remain
+for the trial; the source-check release-readiness flag is unchanged.

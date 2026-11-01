@@ -10,7 +10,7 @@ V0.3.2 新增 WAN 独立分项账、设备侧 VPN 子集和隧道接口计数，
 
 ## V0.4.0 试用版 / Trial release
 
-V0.4.0 按 GitHub **预发布（Pre-release）**准备，以下下载链接在发布流水线成功后生效；构建状态与附件以 [V0.4.0 发布页](https://github.com/Or1a/BetterDPI/releases/tag/V0.4.0)为准。稳定版仍为 V0.3.2，`releases/latest` 与应用内更新不会自动切换到试用版。
+V0.4.0 已按 GitHub **预发布（Pre-release）**提供下载。两个官方 SDK 构建均已完成，安装包内容与标签源码、下载校验值已核对通过，见 [V0.4.0 发布页](https://github.com/Or1a/BetterDPI/releases/tag/V0.4.0)。稳定版仍为 V0.3.2，`releases/latest` 与应用内更新不会自动切换到试用版。
 
 | OpenWrt | V0.4.0 试用包 |
 | --- | --- |
@@ -19,7 +19,7 @@ V0.4.0 按 GitHub **预发布（Pre-release）**准备，以下下载链接在�
 
 下载后用同一发布页的 `SHA256SUMS` 校验，按[试用版安装说明](INSTALL.md#v040-试用版)覆盖安装，无需先卸载。首次试用可打开 **状态 → Anti-PCDN**，选择实际 LAN 接口并开启「仅观察」；保持 DPI 采集运行，等待至少 5 分钟后检查评分、缺失计数和白名单。如需自动处置，再选择「自动封禁」；初始参数为 **80 分、120 秒**，还须通过连接身份和执行路径检查。功能默认关闭，试用参数尚未经过真实业务准确率校准。
 
-V0.4.0 is an opt-in prerelease with Anti-PCDN disabled by default. Use the tag-specific packages above after the release workflow completes; stable downloads and the in-app updater remain on V0.3.2. Open **Status → Anti-PCDN**, start with **Observe only**, then optionally select automatic blocking after reviewing the scores and allowlists.
+V0.4.0 is an available opt-in prerelease with Anti-PCDN disabled by default. Both official SDK builds and downloaded package contents have been verified. Use the tag-specific packages above; stable downloads and the in-app updater remain on V0.3.2. Open **Status → Anti-PCDN**, start with **Observe only**, then optionally select automatic blocking after reviewing the scores and allowlists.
 
 ## Features
 

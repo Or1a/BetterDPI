@@ -11,7 +11,7 @@ Netify 的 LAN 接口、本地 socket 和 JSON 导出仍需按 [README](README.m
 
 ## V0.4.0 试用版
 
-V0.4.0 包含默认关闭的实验性 Anti-PCDN，按 **Pre-release** 发布。构建和发布尚待本次流水线完成，附件是否可下载以 [V0.4.0 发布页](https://github.com/Or1a/BetterDPI/releases/tag/V0.4.0)为准。稳定版仍为 V0.3.2；应用内更新和下文的 `releases/latest` 地址不会自动提供试用版。
+V0.4.0 包含默认关闭的实验性 Anti-PCDN，已按 **Pre-release** 发布。两个官方 SDK 构建、下载附件与源码核对均已通过，可从 [V0.4.0 发布页](https://github.com/Or1a/BetterDPI/releases/tag/V0.4.0)下载。稳定版仍为 V0.3.2；应用内更新和下文的 `releases/latest` 地址不会自动提供试用版。
 
 | OpenWrt | 试用包固定文件名及下载链接 |
 | --- | --- |
