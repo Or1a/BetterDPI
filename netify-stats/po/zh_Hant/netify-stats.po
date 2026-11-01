@@ -938,3 +938,250 @@ msgstr "WAN 報告延遲超過 30 秒的事件：%s；觀察到的最大延遲�
 
 msgid "VPN endpoints (not inner destinations)"
 msgstr "VPN 端點（不是隧道內最終去向）"
+
+# Independent Anti-PCDN feature
+msgid "A release request is pending."
+msgstr "解除規則的請求正在等待處理。"
+
+msgid "Action"
+msgstr "操作"
+
+msgid "Action guarded"
+msgstr "保護條件阻止處置"
+
+msgid "Allowed device MAC addresses"
+msgstr "允許裝置的 MAC 位址"
+
+msgid "Allowed domains"
+msgstr "允許網域"
+
+msgid "Allowlisted"
+msgstr "已加入允許清單"
+
+msgid "Anti-PCDN"
+msgstr "Anti-PCDN 防護"
+
+msgid "Anti-PCDN is disabled in settings."
+msgstr "設定中已停用 Anti-PCDN。"
+
+msgid "Anti-PCDN is enabled in settings."
+msgstr "設定中已啟用 Anti-PCDN。"
+
+msgid "Automatic temporary blocking"
+msgstr "自動臨時攔截"
+
+msgid "Awaiting enforcement checks"
+msgstr "等待處置檢查"
+
+msgid "Below threshold"
+msgstr "未達到門檻"
+
+msgid "Could not request release:"
+msgstr "無法請求解除規則："
+
+msgid "Could not save settings:"
+msgstr "無法儲存設定："
+
+msgid "Coverage and recent actions"
+msgstr "採集涵蓋範圍與近期操作"
+
+msgid "Decision and guards"
+msgstr "判斷與保護條件"
+
+msgid "Device and connection"
+msgstr "裝置與連線"
+
+msgid "Device identity is unconfirmed"
+msgstr "裝置身分尚未確認"
+
+msgid "Download:"
+msgstr "下載："
+
+msgid "Each score weight is 0–40; all five weights must total 100. The maximum score is 100."
+msgstr "每項評分權重為 0–40，五項權重之和必須為 100。最高分為 100。"
+
+msgid "Enable Anti-PCDN"
+msgstr "啟用 Anti-PCDN"
+
+msgid "Expiry unavailable"
+msgstr "無法取得到期時間"
+
+msgid "Flow offload prevents safe enforcement"
+msgstr "流量卸載使安全處置無法得到保證"
+
+msgid "Installed rules are not proof that traffic was successfully blocked. Observed bytes are DPI observations, not blocked bytes."
+msgstr "規則已安裝不代表流量已成功攔截。觀察位元組數來自 DPI 採集，不能作為攔截流量。"
+
+msgid "Known uploader domains"
+msgstr "已知上傳服務網域"
+
+msgid "LAN interface"
+msgstr "區域網路介面"
+
+msgid "Last runtime update:"
+msgstr "執行狀態最後更新時間："
+
+msgid "Mode"
+msgstr "模式"
+
+msgid "No current upload evidence"
+msgstr "目前沒有上傳證據"
+
+msgid "No entries."
+msgstr "暫無記錄。"
+
+msgid "No recent DPI collector heartbeat. Start traffic analysis to collect evidence."
+msgstr "近期沒有 DPI 採集器心跳。請啟動流量分析以收集證據。"
+
+msgid "No runtime diagnostics yet."
+msgstr "暫無執行診斷資訊。"
+
+msgid "Observation only"
+msgstr "僅觀察"
+
+msgid "Observation only: threshold crossings do not install rules."
+msgstr "目前僅觀察：達到門檻也不會安裝規則。"
+
+msgid "Observation window is incomplete"
+msgstr "觀察視窗不完整"
+
+msgid "Observe mode never installs rules. Automatic mode requires both the threshold and all enforcement checks."
+msgstr "觀察模式不會安裝攔截規則。自動模式需同時達到分數門檻並通過所有處置檢查。"
+
+msgid "Observe only"
+msgstr "僅觀察"
+
+msgid "Observed bytes"
+msgstr "觀察流量"
+
+msgid "One DNS name per line, including subdomains at label boundaries. No URLs or wildcards."
+msgstr "每行一個 DNS 網域，符合該網域及其子網域。不支援網址或萬用字元。"
+
+msgid "One MAC address per line; allowed devices are never automatically blocked."
+msgstr "每行一個 MAC 位址；允許清單中的裝置不會被自動攔截。"
+
+msgid "Optional short-window scoring for individual LAN connections. Scores indicate suspicion, not proof of PCDN."
+msgstr "選用功能：按短時視窗為區域網路中的單一連線評分。分數表示可疑程度，並不證明它就是 PCDN。"
+
+msgid "Optional upload-specific hostnames, one per line. Hints add points only to the matching connection. Do not use broad CDN domains."
+msgstr "選填：每行填寫一個上傳專用網域。線索只為符合的連線加分，請勿填寫泛用 CDN 網域。"
+
+msgid "Peer diversity"
+msgstr "對端分布"
+
+msgid "Peers receiving uploads"
+msgstr "接收上傳的對端數"
+
+msgid "Protected transport"
+msgstr "受保護的傳輸"
+
+msgid "Proxy attribution is unavailable"
+msgstr "無法確定代理歸屬"
+
+msgid "Queued observations:"
+msgstr "佇列中的觀察事件："
+
+msgid "Release requested. Wait for the runtime acknowledgement in recent actions."
+msgstr "已請求解除規則，請等待近期操作中的執行端確認。"
+
+msgid "Release rule"
+msgstr "解除規則"
+
+msgid "Rule duration (30–600 seconds)"
+msgstr "規則有效期（30–600 秒）"
+
+msgid "Rule installed; blocking not independently verified"
+msgstr "規則已安裝，攔截效果未經獨立驗證"
+
+msgid "Rule state"
+msgstr "規則狀態"
+
+msgid "Rule state is unconfirmed"
+msgstr "規則狀態尚未確認"
+
+msgid "Rule verification failed; cleanup pending until kernel expiry"
+msgstr "規則驗證失敗，等待清理或核心到期失效"
+
+msgid "Runtime status is stale or unavailable. Listed rules may have expired; release is disabled."
+msgstr "執行狀態已過期或無法取得。所列規則可能已失效，已停用解除操作。"
+
+msgid "Runtime status is unavailable."
+msgstr "無法取得執行狀態。"
+
+msgid "Save Anti-PCDN settings"
+msgstr "儲存 Anti-PCDN 設定"
+
+msgid "Saved settings are awaiting the collector."
+msgstr "已儲存的設定正等待採集器套用。"
+
+msgid "Saving settings…"
+msgstr "正在儲存設定…"
+
+msgid "Score and evidence"
+msgstr "評分與證據"
+
+msgid "Score threshold (1–100)"
+msgstr "評分門檻（1–100）"
+
+msgid "Scored connections"
+msgstr "連線評分"
+
+msgid "Scoring:"
+msgstr "評分："
+
+msgid "Settings saved. The running collector will apply them shortly; paused traffic analysis stays paused."
+msgstr "設定已儲存，執行中的採集器將稍後套用；已暫停的流量分析仍保持暫停。"
+
+msgid "Shared transport"
+msgstr "共用傳輸"
+
+msgid "Sustained uploads"
+msgstr "持續上傳"
+
+msgid "Temporarily suppressed"
+msgstr "暫緩再次處置"
+
+msgid "Temporary connection rules"
+msgstr "臨時連線規則"
+
+msgid "The DPI collector is not connected; evidence may be incomplete."
+msgstr "DPI 採集器尚未連線，證據可能不完整。"
+
+msgid "The request failed."
+msgstr "請求失敗。"
+
+msgid "This feature requires the DPI collector to be running. Enabling it does not start paused traffic analysis. It does not add its observations to traffic totals."
+msgstr "本功能需要 DPI 採集器執行。啟用本功能不會啟動已暫停的流量分析，也不會將觀察資料重複計入流量總數。"
+
+msgid "Threshold reached"
+msgstr "已達到門檻"
+
+msgid "Time remaining"
+msgstr "剩餘時間"
+
+msgid "Upload ratio"
+msgstr "上傳比例"
+
+msgid "Upload:"
+msgstr "上傳："
+
+msgid "Uploader domain hint"
+msgstr "上傳網域線索"
+
+msgid "Use the interface where the device and its MAC address are visible."
+msgstr "請選擇能夠看到裝置及其 MAC 位址的介面。"
+
+msgid "Waiting for an observation window"
+msgstr "等待觀察視窗"
+
+msgid "seconds remaining"
+msgstr "秒後到期"
+
+msgid "Rule released"
+msgstr "規則已解除"
+
+msgid "Rule release failed"
+msgstr "規則解除失敗"
+
+msgid "Rule installed"
+msgstr "規則已安裝"

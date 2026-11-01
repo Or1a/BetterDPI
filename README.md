@@ -6,6 +6,8 @@ BetterDPI 是用于 OpenWrt 的本地流量分析 LuCI 插件，通过 Netify �
 
 V0.3.2 新增 WAN 独立分项账、设备侧 VPN 子集和隧道接口计数，明确防止 LAN/WAN/隧道重复相加，并显示带符号差额及采集缺口。仍保留 7 天明细、更早数据累计，继续使用 `/tmp`。
 
+`feature/anti-pcdn` 分支另提供默认关闭的实验性 Anti-PCDN：独立页面、短期行为评分、白名单和有期限的连接级自动封禁，复用当前 Netify 采集。尚未包含在 V0.3.2 下载包；使用条件、阈值及限制见 [Anti-PCDN 说明](docs/anti-pcdn-design.md)。
+
 ## Features
 
 - Analyze traffic by device, application, and website in LuCI, with paginated rankings and drill-down views.

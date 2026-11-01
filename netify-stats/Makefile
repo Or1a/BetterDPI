@@ -34,6 +34,7 @@ endef
 
 define Package/luci-app-netify-stats/install
 	$(INSTALL_DIR) $(1)/etc/init.d $(1)/usr/sbin $(1)/usr/lib/netify-stats
+	$(INSTALL_DIR) $(1)/usr/lib/netify-stats/anti_pcdn
 	$(INSTALL_DIR) $(1)/lib/upgrade/keep.d
 	$(INSTALL_DIR) $(1)/usr/libexec/rpcd $(1)/usr/share/netify-stats
 	$(INSTALL_DIR) $(1)/usr/share/licenses/luci-app-netify-stats
@@ -44,14 +45,19 @@ define Package/luci-app-netify-stats/install
 	$(INSTALL_DATA) ./packaging/netify-stats.keep $(1)/lib/upgrade/keep.d/netify-stats
 	$(INSTALL_BIN) ./netify_collector.py $(1)/usr/sbin/netify-stats-collector
 	$(INSTALL_BIN) ./netify_rpc.py $(1)/usr/libexec/rpcd/netify-stats
+	$(INSTALL_BIN) ./anti_pcdn_rpc.py $(1)/usr/libexec/rpcd/betterdpi-anti-pcdn
 	$(INSTALL_BIN) ./packaging/post-install $(1)/usr/lib/netify-stats/package-post-install
 	$(INSTALL_BIN) ./packaging/pre-deinstall $(1)/usr/lib/netify-stats/package-pre-deinstall
-	$(INSTALL_DATA) ./netify_accounting.py ./netify_classify.py ./netify_control.py ./netify_storage.py ./netify_proxy.py ./netify_query.py ./netify_update.py ./netify_wan.py $(1)/usr/lib/netify-stats/
+	$(INSTALL_DATA) ./netify_accounting.py ./netify_classify.py ./netify_control.py ./netify_storage.py ./netify_proxy.py ./netify_query.py ./netify_update.py ./netify_wan.py ./netify_features.py $(1)/usr/lib/netify-stats/
+	$(INSTALL_DATA) ./features/anti_pcdn/__init__.py ./features/anti_pcdn/config.py ./features/anti_pcdn/engine.py ./features/anti_pcdn/scoring.py ./features/anti_pcdn/conntrack.py ./features/anti_pcdn/firewall.py ./features/anti_pcdn/runtime.py $(1)/usr/lib/netify-stats/anti_pcdn/
 	$(INSTALL_DATA) ./rules/community-rules.json ./rules/COMMUNITY-LICENSE ./rules/NEXTDNS-LICENSE $(1)/usr/share/netify-stats/
 	$(INSTALL_DATA) ./LICENSE $(1)/usr/share/licenses/luci-app-netify-stats/LICENSE
 	$(INSTALL_DATA) ./acl.json $(1)/usr/share/rpcd/acl.d/luci-app-netify-stats.json
 	$(INSTALL_DATA) ./menu.json $(1)/usr/share/luci/menu.d/luci-app-netify-stats.json
+	$(INSTALL_DATA) ./anti-pcdn-acl.json $(1)/usr/share/rpcd/acl.d/luci-app-betterdpi-anti-pcdn.json
+	$(INSTALL_DATA) ./anti-pcdn-menu.json $(1)/usr/share/luci/menu.d/luci-app-betterdpi-anti-pcdn.json
 	$(INSTALL_DATA) ./netify-stats.js $(1)/www/luci-static/resources/view/status/netify-stats.js
+	$(INSTALL_DATA) ./anti-pcdn.js $(1)/www/luci-static/resources/view/status/anti-pcdn.js
 	$(INSTALL_DATA) ./i18n/netify-stats.zh-cn.lmo ./i18n/netify-stats.zh-tw.lmo $(1)/usr/lib/lua/luci/i18n/
 endef
 

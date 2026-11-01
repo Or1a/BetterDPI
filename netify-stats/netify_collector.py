@@ -16,6 +16,7 @@ from netify_accounting import InterfaceAccounting
 from netify_storage import compact_schema, correct_hourly, HourlyWriter, StoragePolicy
 from netify_proxy import RedirectMap
 from netify_wan import WanAccounting
+from netify_features import FeatureBridge
 
 
 SOCKET_PATH = "/var/run/netifyd/netifyd.sock"
@@ -121,6 +122,8 @@ class Collector:
                     self.local_macs.add(handle.read().strip().lower())
             except OSError:
                 pass
+        self.features = FeatureBridge(self.local_macs)
+        self.features.tick()
 
     def normalize_metadata(self, message):
         flow = message.get("flow") or {}
@@ -538,6 +541,9 @@ class Collector:
     def maintenance(self):
         now_mono = time.monotonic()
         if now_mono - self.last_commit >= 3:
+            features = getattr(self, 'features', None)
+            if features:
+                features.tick()
             self.expire_original_candidates()
             self.recover_metadata()
             if self.proxy.want_egress and now_mono-self.proxy.egress_updated >= 30:
@@ -575,6 +581,8 @@ class Collector:
             raise
         client.settimeout(None)
         self.connected = True
+        if getattr(self, 'features', None):
+            self.features.connection(True)
         self.last_error = ""
         self.write_status()
         self.flows.clear()
@@ -623,17 +631,31 @@ class Collector:
                 self.invalid_messages += 1
                 return
         try:
+            # Forward once, before accounting transformations. Recovered file
+            # snapshots and replayed pending stats never enter this subscriber.
+            features = getattr(self, 'features', None)
+            if features and features.active:
+                features.submit(message)
             self.handle(message)
         except (ValueError, TypeError, OverflowError):
             self.invalid_messages += 1
 
     def run(self):
+        try:
+            self._run()
+        finally:
+            if getattr(self, 'features', None):
+                self.features.close()
+
+    def _run(self):
         self.write_status()
         while self.running:
             try:
                 self.connect_and_read()
             except Exception as exc:
                 self.connected = False
+                if getattr(self, 'features', None):
+                    self.features.connection(False)
                 self.last_error = str(exc)
                 self.db.commit()
                 self.write_status()

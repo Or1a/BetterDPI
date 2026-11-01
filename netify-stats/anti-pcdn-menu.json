@@ -1,0 +1,8 @@
+{
+  "admin/status/anti-pcdn": {
+    "title": "Anti-PCDN",
+    "order": 36,
+    "action": { "type": "view", "path": "status/anti-pcdn" },
+    "depends": { "acl": [ "luci-app-betterdpi-anti-pcdn" ] }
+  }
+}

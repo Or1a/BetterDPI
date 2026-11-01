@@ -40,7 +40,7 @@ jobs:
           fi
           python3 -m unittest discover -s netify-stats -p 'test_*.py'
           python3 netify-stats/reproduce_late_original.py
-          for test in test_i18n_ui.cjs test_classification_ui.cjs test_diagnostics_ui.cjs test_filter_ui.cjs test_update_ui.cjs test_interface_ui.cjs test_logic.cjs test_settings_ui.cjs test_ui_helpers.cjs; do
+          for test in test_i18n_ui.cjs test_classification_ui.cjs test_diagnostics_ui.cjs test_filter_ui.cjs test_update_ui.cjs test_interface_ui.cjs test_logic.cjs test_settings_ui.cjs test_ui_helpers.cjs test_anti_pcdn_ui.cjs; do
             node "netify-stats/$test"
           done
       - name: Download verified OpenWrt SDK

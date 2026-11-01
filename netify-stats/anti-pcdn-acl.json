@@ -1,0 +1,7 @@
+{
+  "luci-app-betterdpi-anti-pcdn": {
+    "description": "View and configure the optional BetterDPI Anti-PCDN feature",
+    "read": { "ubus": { "betterdpi-anti-pcdn": [ "status" ] } },
+    "write": { "ubus": { "betterdpi-anti-pcdn": [ "configure", "release" ] } }
+  }
+}

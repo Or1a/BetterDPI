@@ -14,6 +14,63 @@ CATALOG_SOURCES = {
 }
 
 
+def python_modules(root, manifest):
+    """Index the import layout users receive, rather than source basenames."""
+    trees, packages = {}, set()
+    library = Path('/usr/lib/netify-stats')
+    for source, (destination, _mode) in manifest.items():
+        path = root/source
+        assert path.is_file(), 'Missing source: '+source
+        if path.suffix != '.py':
+            continue
+        target = Path(destination)
+        if target.is_relative_to(library):
+            parts = list(target.relative_to(library).with_suffix('').parts)
+            if parts[-1] == '__init__':
+                parts.pop()
+                packages.add('.'.join(parts))
+            name = '.'.join(parts)
+        else:
+            # Executable entry points are not importable from the library,
+            # but retain a stable name for diagnostics and version checks.
+            name = path.stem
+        assert name and name not in trees, 'Duplicate installed Python module: '+name
+        trees[name] = ast.parse(path.read_text(), filename=source)
+    return trees, packages
+
+
+def check_imports(trees, packages):
+    def require(caller, name):
+        if name.startswith('netify_') or name == 'anti_pcdn' or name.startswith('anti_pcdn.'):
+            assert name in trees, caller+' imports uninstalled module '+name
+            parts = name.split('.')
+            for length in range(1, len(parts)):
+                package = '.'.join(parts[:length])
+                assert package in packages, caller+' imports uninstalled package '+package
+
+    for module, tree in trees.items():
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for item in node.names:
+                    require(module, item.name)
+            elif isinstance(node, ast.ImportFrom):
+                if node.level:
+                    package = module if module in packages else module.rpartition('.')[0]
+                    parts = package.split('.') if package else []
+                    assert len(parts) >= node.level, module+' has invalid relative import'
+                    prefix = '.'.join(parts[:len(parts)-node.level+1])
+                    imported = prefix + ('.'+node.module if node.module else '')
+                else:
+                    imported = node.module or ''
+                require(module, imported)
+                # `from . import config` imports a child module. Normal
+                # `from .config import load` is already checked above.
+                if node.level and not node.module:
+                    for item in node.names:
+                        if item.name != '*':
+                            require(module, imported+'.'+item.name)
+
+
 def check(root=ROOT):
     manifest = json.loads((root/'packaging/runtime-manifest.json').read_text())
     recipe = (root/'Makefile').read_text()
@@ -31,19 +88,8 @@ def check(root=ROOT):
             installed[source] = [destination, '0755' if match[1] == 'BIN' else '0644']
     assert installed == manifest, 'Makefile installation differs from runtime-manifest.json'
     assert len({entry[0] for entry in manifest.values()}) == len(manifest), 'Duplicate destination'
-    trees = {}
-    for source in manifest:
-        path = root/source
-        assert path.is_file(), 'Missing source: '+source
-        if path.suffix == '.py':
-            trees[path.stem] = ast.parse(path.read_text(), filename=source)
-    for module, tree in trees.items():
-        for node in ast.walk(tree):
-            imported = [node.module] if isinstance(node, ast.ImportFrom) else (
-                [item.name for item in node.names] if isinstance(node, ast.Import) else [])
-            for name in imported:
-                if name and name.startswith('netify_'):
-                    assert name in trees, module+' imports uninstalled module '+name
+    trees, packages = python_modules(root, manifest)
+    check_imports(trees, packages)
     assert not re.search(r'^PKG_BUILD_DEPENDS\s*[:+]?=', recipe, re.M), 'Pure-data package should not rebuild host dependencies'
     assert re.search(r'^define Build/Compile\n\s*:\s*\nendef$', recipe, re.M), 'Pure-data package must override the default source compiler'
     for name, source in CATALOG_SOURCES.items():
@@ -69,8 +115,9 @@ def check(root=ROOT):
     assert re.search(r'^PKG_LICENSE_FILES:=LICENSE$', recipe, re.M), 'Project license file metadata mismatch'
     assert manifest.get('LICENSE') == ['/usr/share/licenses/luci-app-netify-stats/LICENSE', '0644'], 'Project license installation mismatch'
     assert 'LICENSE' in public_sources, 'Project license missing from source list'
-    assert (root/'packaging/netify-stats.keep').read_text().splitlines() == ['/etc/netify-stats.json']
-    assert '/etc/netify-stats.json' not in {entry[0] for entry in manifest.values()}, 'Must not replace user settings'
+    settings = ['/etc/netify-stats.json', '/etc/betterdpi-anti-pcdn.json']
+    assert (root/'packaging/netify-stats.keep').read_text().splitlines() == settings
+    assert not set(settings).intersection(entry[0] for entry in manifest.values()), 'Must not replace user settings'
     # SDK scripts call the installed hooks instead of maintaining a second copy.
     for section, filename in [('postinst','post-install'), ('prerm','pre-deinstall')]:
         body = re.search(r'define Package/luci-app-netify-stats/'+section+r'\n(.*?)\nendef', recipe, re.S)[1]
@@ -81,7 +128,7 @@ def check(root=ROOT):
     for source in rules.get('sources', []):
         assert source.get('repo') and re.fullmatch('[0-9a-f]{40}', source.get('revision',''))
         assert source.get('license') and 'rules/'+source['license_file'] in manifest, 'Missing source license in package'
-    for name in ('acl.json','menu.json'):
+    for name in ('acl.json','menu.json','anti-pcdn-acl.json','anti-pcdn-menu.json'):
         json.loads((root/name).read_text())
     return {'version':version, 'runtime_files':len(manifest), 'internal_modules':len(trees),
             'source_checks':'passed', 'public_release_ready':False}
