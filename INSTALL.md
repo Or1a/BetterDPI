@@ -14,7 +14,7 @@ Netify 的 LAN 接口、本地 socket 和 JSON 导出仍需按 [README](README.m
 
 ## V0.4.2 试用版
 
-V0.4.2 修复 Anti-PCDN 采集覆盖和长连接分钟上传遗漏，增加跨端口设备观察分和资源诊断。继续以 **Pre-release** 试用，两个官方 SDK 包由发布流水线上传至 [V0.4.2 发布页](https://github.com/Or1a/BetterDPI/releases/tag/V0.4.2)；验证范围见[修复记录](docs/anti-pcdn-042-fixes.md)。稳定版仍为 V0.3.2；应用内更新和下文的 `releases/latest` 地址不会自动提供试用版。
+V0.4.2 修复 Anti-PCDN 采集覆盖和长连接分钟上传遗漏，增加跨端口设备观察分和资源诊断。继续以 **Pre-release** 试用，两个官方 SDK 包已构建并核对，可从 [V0.4.2 发布页](https://github.com/Or1a/BetterDPI/releases/tag/V0.4.2)下载；验证范围见[修复记录](docs/anti-pcdn-042-fixes.md)。稳定版仍为 V0.3.2；应用内更新和下文的 `releases/latest` 地址不会自动提供试用版。
 
 | OpenWrt | 试用包固定文件名及下载链接 |
 | --- | --- |

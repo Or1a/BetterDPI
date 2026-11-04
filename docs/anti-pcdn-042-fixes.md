@@ -57,4 +57,17 @@ python3 netify-stats/bench_anti_pcdn.py memory --output-dir /tmp/betterdpi-bench
 
 ## 发布附件
 
-V0.4.2 由匹配的 OpenWrt 24.10.8 / 25.12.5 官方 SDK 构建 IPK / APK，流水线通过后提供试用下载。发布后在本节补充附件核对。稳定版保持 V0.3.2；安装步骤见 [INSTALL.md](../INSTALL.md#v042-试用版)。
+[发布流水线 41759524603](https://github.com/Or1a/BetterDPI/actions/runs/41759524603)已完成两个官方 SDK 构建并发布 [V0.4.2 预发布](https://github.com/Or1a/BetterDPI/releases/tag/V0.4.2)，标签提交为 `9ab767333ef29bc5a82f7b2600532211d67699d5`。
+
+发布后实际重新下载六个附件，验证四个安装包与 `update.json` 的 SHA-256、两组固定名称别名逐字节一致，并用运行时校验器验证更新清单。两包均为 `0.4.2-r1`，IPK 架构 `all`，APK 为 `noarch`；全部 36 个运行文件内容和权限匹配标签源码。APK 仅多出 SDK 包文件清单，不含用户配置或诊断数据。
+
+IPK 的 SDK 包装器与包级安装／卸载脚本，以及 APK 的安装、升级、卸载三个钩子均已核对。APK 用固定到 OpenWrt 对应上游提交的 apk-tools 3.0.5 解包，没有在云主机安装路由器应用或运行安装钩子。
+
+两包各通过五项包内只读 RPC 检查：本地状态、携带 `ubus_rpc_session` 的状态、拒绝非法会话、拒绝未知参数、60 秒分钟查询。测试加载实际包内程序并禁止写入、联网和启动进程；查询使用临时合成数据库，分钟与小时字节数分别核验。这不等于真实路由器 HTTP 登录或安装升级验收。
+
+| V0.4.2 安装包 | 字节数 | SHA-256 |
+| --- | ---: | --- |
+| `BetterDPI-0.4.2-openwrt-24.10.8-all.ipk` | 288919 | `b544d089ec77d2a89fcae5a42fc2fe5252a3497e8a247477d8e795774d3be23a` |
+| `BetterDPI-0.4.2-openwrt-25.12.5-all.apk` | 284987 | `c48c76e35914bee2835fef2c32c83041f73f0a2ce2f32e4322aa3114cd31d243` |
+
+已确认 `releases/latest` 仍为 V0.3.2，稳定更新通道未切换。V0.4.0 / V0.4.1 用户按 [INSTALL.md](../INSTALL.md#v042-试用版)手动覆盖升级，强制刷新页面，并等待新的完整观察窗口。

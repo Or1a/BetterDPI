@@ -12,7 +12,7 @@ V0.3.2 新增 WAN 独立分项账、设备侧 VPN 子集和隧道接口计数，
 
 V0.4.2 修复诊断日志暴露的 Anti-PCDN 覆盖问题：普通小流量端口不再占满上传评分名额，缺失连接身份可从现有 Netify 导出恢复，已知局部缺口只影响相关连接组。新增跨端口设备观察分和当前资源占用，避免把低分误读为无风险。持续 TCP 上传的分钟图不再在四个分钟条目后漏记，迟到代理纠正仍保持去重。
 
-本版本继续按 GitHub **预发布（Pre-release）**提供试用。发布流水线生成两个官方 SDK 包后上传至 [V0.4.2 发布页](https://github.com/Or1a/BetterDPI/releases/tag/V0.4.2)，修复和验证范围见[本轮记录](docs/anti-pcdn-042-fixes.md)。稳定版仍为 V0.3.2，`releases/latest` 与应用内更新不会自动提供试用版。
+本版本继续按 GitHub **预发布（Pre-release）**提供试用。两个官方 SDK 包已构建并核对，可从 [V0.4.2 发布页](https://github.com/Or1a/BetterDPI/releases/tag/V0.4.2)下载；修复和验证范围见[本轮记录](docs/anti-pcdn-042-fixes.md)。稳定版仍为 V0.3.2，`releases/latest` 与应用内更新不会自动提供试用版。
 
 | OpenWrt | V0.4.2 试用包 |
 | --- | --- |
