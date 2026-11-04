@@ -1,7 +1,8 @@
 """Bounded optional worker: live observations -> scores -> short kernel leases.
 
 This module has no database or traffic-writer dependency. Only the collector's
-raw socket stream may submit events; metadata recovery must not feed this queue.
+raw socket stream may submit traffic; requested metadata recovery supplies only
+identity and a cumulative baseline, never traffic samples.
 """
 from collections import Counter, deque
 import json
@@ -74,6 +75,9 @@ class Worker(threading.Thread):
         self.retries = {}
         self.cleanup_ready = False
         self.last_cleanup_attempt = float('-inf')
+        self.recovery_keys = ()
+        self.recovery_revision = 0
+        self.recovery_error = ''
 
     def request_stop(self):
         self.stopping.set()
@@ -121,6 +125,26 @@ class Worker(threading.Thread):
         # time age accurate even if this item briefly waited in the queue.
         self.engine.observe(message, now, wall + now - arrived)
         self.counters['observed_events'] += 1
+
+    def seed_metadata(self, message):
+        """Accept a requested export baseline without treating it as traffic."""
+        if self.stopping.is_set():
+            return False
+        try:
+            event = project(dict(message, type='flow'), self.settings['interface'])
+            if event is None or (event['interface'], event['flow'].get('digest')) not in self.recovery_keys:
+                return False
+            event['type'] = 'flow_seed'
+            self.queue.put_nowait((self.generation[0], event, self.clock(), self.wall()))
+            return True
+        except ValueError:
+            self.counters['recovery_rejected'] += 1
+            self.recovery_error = 'Recovered metadata has invalid or oversized fields.'
+            return True
+        except queue.Full:
+            # No live increment has been lost: retry metadata next maintenance.
+            self.counters['recovery_deferred'] += 1
+            return False
 
     def event(self, kind, **fields):
         self.events.append(dict(timestamp=self.wall(), kind=kind, **fields))
@@ -232,7 +256,13 @@ class Worker(threading.Thread):
                      interface=self.settings['interface'], candidates=self.rows[:50], leases=leases,
                      counters=dict(self.counters), engine_counters=dict(self.engine.counters),
                      error=self.error, executor_error=self.firewall.error,
+                     metadata_error=self.recovery_error,
                      events=list(self.events), queue_depth=self.queue.qsize())
+        if hasattr(self.engine, 'coverage'):
+            state['coverage'] = self.engine.coverage(now)
+            state['devices'] = self.engine.device_rows if self.connected and not stopped else []
+            self.recovery_keys = tuple(self.engine.missing)
+            self.recovery_revision = self.engine.counters['gaps']
         payload = json.dumps(state, separators=(',', ':'), allow_nan=False).encode('utf-8')
         if len(payload) > 256 * 1024:
             state.update(candidates=[], events=[], error='status_size_limit')

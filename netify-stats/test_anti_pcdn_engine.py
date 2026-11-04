@@ -62,6 +62,157 @@ class ScoringTests(unittest.TestCase):
 
 
 class ObserverTests(unittest.TestCase):
+    def test_small_ports_do_not_reserve_upload_groups_and_new_upload_is_observed(self):
+        stream = Stream()
+        for number in range(32):
+            stream.metadata(number, local_port=40000 + number, ip_protocol=6)
+        for number in range(32):
+            stream.event(number, 10, up=100, down=200)
+        self.assertEqual(len(stream.engine.groups), 0)
+        stream.metadata(100, 10, local_port=8500)
+        for now in range(20, 341, 10):
+            for number in range(32):
+                stream.event(number, now, up=100, down=200)
+            stream.event(100, now, up=MIB, down=KIB)
+        target = next(row for row in stream.engine.candidates(340) if row['sport'] == 8500)
+        self.assertGreater(target['upload'], 0)
+        self.assertEqual(len(stream.engine.groups), 1)
+        self.assertEqual(len(stream.engine.flows), 33)
+        self.assertEqual(stream.engine.counters['capacity_drops'], 0)
+        self.assertNotIn('short_window_only', target['guards'])
+
+    def test_closed_small_flows_keep_dedup_without_reserving_groups(self):
+        stream = Stream()
+        for number in range(32):
+            stream.metadata(number, local_port=40000 + number)
+        for number in range(32):
+            stream.event(number, 1, up=100, down=200, kind='flow_purge')
+        stream.metadata(100, 2, local_port=8500)
+        event = stream.event(100, 10)
+        stream.engine.observe(event, 11, BASE + 11)
+        self.assertEqual(len(stream.engine.flows), 33)
+        self.assertEqual(len(stream.engine.groups), 1)
+        self.assertEqual(stream.engine.counters['duplicates'], 1)
+
+    def test_cross_port_device_evidence_is_visible_but_never_authorizes_other_connections(self):
+        stream = Stream()
+        for number in range(20):
+            stream.metadata(number, local_port=40000 + number)
+        for now in range(10, 331, 10):
+            for number in range(20):
+                stream.event(number, now)
+        rows = stream.engine.candidates(330)
+        device = stream.engine.device_rows[0]
+        self.assertEqual(device['score'], 80)
+        self.assertEqual(device['ports'], 20)
+        self.assertTrue(device['complete'])
+        self.assertTrue(device['observation_only'])
+        self.assertTrue(all(row['device_score'] == 80 and row['score'] == 0 and row['decision'] == 'observe' for row in rows))
+        # Domain/host opt-outs still exclude their samples from device evidence.
+        stream.engine.settings['allow_devices'] = [MAC]
+        stream.engine.candidates(330)
+        self.assertEqual(stream.engine.device_rows, [])
+
+    def test_exclusion_cache_overflow_does_not_invalidate_known_unrelated_evidence(self):
+        stream = Stream()
+        stream.populate()
+        for number in range(1000, 1000 + engine.MAX_IGNORED + 1):
+            stream.metadata(number, 331, other_type='local')
+        self.assertEqual(len(stream.engine.ignored), engine.MAX_IGNORED)
+        self.assertEqual(stream.engine.counters['exclusion_capacity'], 1)
+        self.assertTrue(all(row['decision'] == 'block' for row in stream.engine.candidates(331)))
+        # An uncached, unidentifiable stats event is still quarantined until
+        # its metadata proves that it really belongs to excluded traffic.
+        number = 1000 + engine.MAX_IGNORED
+        stream.event(number, 332)
+        self.assertTrue(all(row['decision'] == 'observe' for row in stream.engine.candidates(332)))
+        stream.metadata(number, 333, first_seen_at=(BASE + 331) * 1000, other_type='local')
+        self.assertTrue(all(row['decision'] == 'block' for row in stream.engine.candidates(333)))
+
+    def test_metadata_recovery_seeds_watermark_and_scopes_loss_without_replaying_bytes(self):
+        stream = Stream()
+        stream.populate()
+        stream.event(1000, 331)
+        self.assertGreater(stream.engine.coverage(331)['global_wait_seconds'], 0)
+        raw = dict(digest='1000', first_seen_at=(BASE + 300) * 1000,
+                   last_seen_at=(BASE + 331) * 1000, total_bytes=100*MIB,
+                   local_bytes=100*MIB, other_bytes=0, local_mac='02:22:33:44:55:66',
+                   local_ip='192.168.1.3', other_ip='8.8.8.8', local_port=8500,
+                   other_port=443, ip_protocol=17, other_type='remote')
+        stream.engine.observe(dict(type='flow_seed', interface='br-lan', internal=True, flow=raw), 332, BASE + 332)
+        self.assertEqual(stream.engine.coverage(332)['global_wait_seconds'], 0)
+        self.assertTrue(all(row['decision'] == 'block' for row in stream.engine.candidates(332)))
+        flow = stream.engine.flows[('br-lan', '1000')]
+        self.assertFalse(flow.samples)
+        stream.event(1000, 333, up=100, down=20, total_bytes=100*MIB + 120)
+        target = next(row for row in stream.engine.candidates(333) if row['sport'] == 8500)
+        self.assertEqual((target['upload'], target['download']), (100, 20))
+        self.assertIn('incomplete_window', target['guards'])
+        stream.event(1000, 334, up=100, down=20, total_bytes=100*MIB, last_seen_at=(BASE + 330) * 1000)
+        self.assertEqual(stream.engine.counters['recovery_overlap'], 1)
+        self.assertEqual(sum(sample[1] for sample in flow.samples), 100)
+
+    def test_unresolved_metadata_and_scoring_capacity_remain_bounded_and_fail_open(self):
+        stream = Stream()
+        stream.populate()
+        for number in range(engine.MAX_RECOVERY + 1):
+            stream.event(1000 + number, 331)
+        self.assertEqual(len(stream.engine.missing), engine.MAX_RECOVERY)
+        self.assertEqual(stream.engine.counters['recovery_capacity'], 1)
+        self.assertTrue(all(row['decision'] == 'observe' for row in stream.engine.candidates(331)))
+        other = Stream()
+        for number in range(33):
+            other.metadata(number, local_port=40000 + number)
+        for number in range(33):
+            other.event(number, 10)
+        self.assertEqual(len(other.engine.groups), engine.MAX_DEVICE_GROUPS)
+        self.assertEqual(len(other.engine.flows), 33)
+        self.assertEqual(other.engine.counters['device_group_capacity'], 1)
+        self.assertTrue(all(row['decision'] == 'observe' for row in other.engine.candidates(10)))
+
+    def test_recovered_same_group_keeps_group_guard_for_a_full_new_window(self):
+        stream = Stream()
+        stream.populate()
+        stream.event(1000, 331)
+        metadata = dict(digest='1000', first_seen_at=(BASE + 300) * 1000,
+                        last_seen_at=(BASE + 331) * 1000, total_bytes=1000,
+                        local_mac=MAC, local_ip='192.168.1.2', other_ip='8.8.8.8',
+                        local_port=40000, other_port=443, ip_protocol=17, other_type='remote')
+        stream.engine.observe(dict(type='flow_seed', interface='br-lan', internal=True, flow=metadata), 332, BASE + 332)
+        self.assertEqual(stream.engine.coverage(332)['global_wait_seconds'], 0)
+        self.assertTrue(all(row['decision'] == 'observe' and row['wait_seconds'] >= 300
+                            for row in stream.engine.candidates(332)))
+
+    def test_many_known_inactive_losses_do_not_block_an_unrelated_complete_group(self):
+        stream = Stream()
+        stream.populate()
+        for number in range(1000, 1000 + engine.MAX_GROUPS + 1):
+            stream.metadata(number, 331, local_port=number)
+        for number in range(1000, 1000 + engine.MAX_GROUPS + 1):
+            stream.event(number, 332, total_bytes=1)
+        self.assertEqual(stream.engine.coverage(332)['global_wait_seconds'], 0)
+        self.assertEqual(stream.engine.counters['counter_gaps'], engine.MAX_GROUPS + 1)
+        self.assertTrue(all(row['decision'] == 'block' for row in stream.engine.candidates(332)))
+        stream.event(1000, 333, total_bytes=1 + 65*KIB)
+        row = next(row for row in stream.engine.candidates(333) if row['sport'] == 1000)
+        self.assertEqual(row['decision'], 'observe')
+        self.assertIn('incomplete_window', row['guards'])
+
+    def test_recovery_rejects_wrong_identity_and_future_snapshot_without_resolving_gap(self):
+        for fields in ({'first_seen_at': (BASE + 1)*1000},
+                       {'last_seen_at': (BASE + 100)*1000},
+                       {'total_bytes': -1}):
+            with self.subTest(fields=fields):
+                stream = Stream()
+                stream.event(now=10, first_seen_at=BASE*1000)
+                raw = dict(digest='0', first_seen_at=BASE*1000,
+                           last_seen_at=(BASE + 10)*1000, total_bytes=65*KIB)
+                raw.update(fields)
+                stream.engine.observe(dict(type='flow_seed', interface='br-lan', internal=True, flow=raw), 11, BASE + 11)
+                self.assertEqual(len(stream.engine.missing), 1)
+                self.assertFalse(stream.engine.flows)
+                self.assertEqual(stream.engine.counters['recovery_rejected'], 1)
+
     def test_default_behavior_threshold_is_inclusive_and_mode_is_respected(self):
         stream = Stream()
         rows = stream.populate()
@@ -374,7 +525,8 @@ class ObserverTests(unittest.TestCase):
         rows = [row for row in stream.engine.candidates(331) if row['mac'] == MAC]
         self.assertEqual(len(rows), 20)
         self.assertTrue(all(row['decision'] == 'block' for row in rows))
-        self.assertEqual(stream.engine.counters['capacity_drops'], 18)
+        self.assertEqual(stream.engine.counters['capacity_drops'], 0)
+        self.assertEqual(len(stream.engine.flows), 70)
         self.assertEqual(stream.engine.counters['missing_metadata'], 0)
 
     def test_same_connection_under_two_digests_is_counted_only_once(self):

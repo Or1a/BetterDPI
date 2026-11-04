@@ -874,6 +874,18 @@ return view.extend({
 		 * button heights used by several LuCI themes on phones. */
 		style.appendChild(document.createTextNode(`
 .ns-root { min-width:0; color:inherit; }
+.ns-root .ns-toolbar { padding:14px; border:1px solid rgba(127,127,127,.18); border-radius:12px; background:rgba(127,127,127,.035); }
+.ns-root .ns-section { margin-bottom:18px; }
+.ns-root .ns-stat { border-top:3px solid rgba(127,127,127,.4); }
+.ns-root .ns-stat.download { border-top-color:#4d9de0; }
+.ns-root .ns-stat.upload { border-top-color:#ee7a59; }
+.ns-root .ns-stat-value { overflow-wrap:anywhere; }
+.ns-root .ns-trend-selection { padding:10px 12px; border-radius:8px; background:rgba(127,127,127,.06); font-variant-numeric:tabular-nums; }
+.ns-root .ns-trend-scroll { scrollbar-width:thin; }
+.ns-root button.ns-trend-group:hover { background:rgba(127,127,127,.12)!important; }
+.ns-root button:focus-visible, .ns-root select:focus-visible, .ns-root input:focus-visible, .ns-root summary:focus-visible { outline:2px solid #4d9de0; outline-offset:3px; }
+.ns-root .ns-app-main:hover { background:rgba(127,127,127,.055)!important; }
+
 .ns-root .ns-section-head>h3 { flex:1 1 auto; width:auto!important; min-width:0; }
 .ns-root .ns-legend { display:inline-flex!important; flex:0 0 auto; align-items:center; gap:16px; width:auto!important; white-space:nowrap!important; line-height:1.4; }
 .ns-root .ns-legend>span { display:inline-flex!important; flex:0 0 auto!important; align-items:center; gap:6px; width:auto!important; min-width:max-content; margin:0!important; padding:0!important; white-space:nowrap!important; word-break:keep-all!important; overflow-wrap:normal!important; letter-spacing:normal; writing-mode:horizontal-tb; }

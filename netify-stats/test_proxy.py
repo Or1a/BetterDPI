@@ -401,7 +401,7 @@ class ProxyTest(unittest.TestCase):
             with open(collector.EXPORT_PATH, 'w') as handle:
                 json.dump({'interfaces': {'br-lan': {'role': 'LAN'}},
                            'flows': {'br-lan': snapshots}}, handle)
-            with patch.object(collector.json, 'load', wraps=json.load) as read_export:
+            with patch.object(collector.json, 'loads', wraps=json.loads) as read_export:
                 instance.add_stats(self.stats('not-in-export'))
                 instance.add_stats(self.stats('first'))
                 instance.recover_metadata()

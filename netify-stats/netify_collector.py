@@ -17,7 +17,7 @@ from netify_storage import compact_schema, correct_hourly, HourlyWriter, Storage
 from netify_proxy import RedirectMap
 from netify_wan import WanAccounting
 from netify_features import FeatureBridge
-from netify_minute import MinuteSeries
+from netify_minute import MinuteSeries, RETENTION_MINUTES
 
 
 SOCKET_PATH = "/var/run/netifyd/netifyd.sock"
@@ -28,6 +28,8 @@ STATUS_PATH = os.path.join(RUNTIME_DIR, "status.json")
 EXPORT_PATH = '/var/run/netifyd/sink-request.json'
 PENDING_LIMIT = 4096
 PENDING_TTL = 60
+MINUTE_CORRECTION_LIMIT = 16384
+MAX_EXPORT_BYTES = 16 * 1024 * 1024
 HOST_PATTERN = re.compile(r'[a-z0-9_-]+(?:\.[a-z0-9_-]+)+', re.I)
 TRANSPORT_NAMES = {6: 'TCP', 17: 'UDP', 50: 'IPsec ESP', 51: 'IPsec AH'}
 
@@ -97,6 +99,8 @@ class Collector:
         # Short-lived TCP candidates allow a late REDIRECT map to correct
         # counters already recorded for the original leg.
         self.original_candidates = OrderedDict()
+        self.minute_correction_count = 0
+        self.minute_correction_bucket = None
         self.missing_metadata = 0
         self.recovered_stats = 0
         self.unattributed_upload = 0
@@ -104,6 +108,8 @@ class Collector:
         self.export_error = ''
         self.export_stamp = None
         self.export_checked = set()
+        self.feature_export_checked = set()
+        self.feature_recovery_stamp = None
         self.seen = set()
         self.seen_needs_vacuum = False
         self.seen_generation = 0
@@ -230,6 +236,7 @@ class Collector:
             key = (digest[0], identity)
             candidate = self.original_candidates.get(key)
             if candidate is None or candidate['digest'] != digest:
+                self.drop_original_candidate(key)
                 candidate = {'digest': digest, 'entries': {}, 'last': time.monotonic()}
             candidate['last'] = time.monotonic()
             self.original_candidates[key] = candidate
@@ -245,12 +252,38 @@ class Collector:
             key, candidate = next(iter(self.original_candidates.items()))
             if len(self.original_candidates) <= PENDING_LIMIT and candidate['last'] >= cutoff:
                 break
-            self.original_candidates.popitem(last=False)
+            self.drop_original_candidate(key)
+
+    def drop_original_candidate(self, key):
+        candidate = self.original_candidates.pop(key, None)
+        if candidate is not None:
+            self.minute_correction_count -= len(candidate.get('minutes', {}))
+        return candidate
+
+    def prune_minute_corrections(self, now):
+        """Keep exact correction provenance for every retained chart minute.
+
+        Active TCP candidates refresh their idle deadline indefinitely. A four
+        entry per-flow cap therefore discarded normal uploads after minute four.
+        Share the previous worst-case budget across flows instead, and prune at
+        most once per minute (also on a clock rollback), not once per event.
+        """
+        current = int(now) // 60 * 60
+        if current == self.minute_correction_bucket:
+            return
+        self.minute_correction_bucket = current
+        oldest = current - (RETENTION_MINUTES - 1) * 60
+        for candidate in self.original_candidates.values():
+            entries = candidate.get('minutes', {})
+            for key in tuple(entries):
+                if not oldest <= key[0] <= current:
+                    del entries[key]
+                    self.minute_correction_count -= 1
 
     def reconcile_original(self, interface, connection):
         self.sync_retention()
         self.expire_original_candidates()
-        candidate = self.original_candidates.pop((interface, connection), None)
+        candidate = self.drop_original_candidate((interface, connection))
         if candidate is None:
             return
         original = self.flows.get(candidate['digest'])
@@ -310,6 +343,7 @@ class Collector:
             for key in tuple(candidate.get('minutes', {})):
                 if key[0] // 3600 * 3600 in buckets:
                     candidate['minutes'].pop(key)
+                    self.minute_correction_count -= 1
 
     @staticmethod
     def seen_identity(identity):
@@ -474,16 +508,18 @@ class Collector:
         # A single numeric row per device/minute is flushed with that same
         # transaction; it is never added back into the hourly traffic totals.
         minute_upload = upload
-        if minute_candidate is not None:
+        self.prune_minute_corrections(self.seen_latest)
+        if minute_candidate is not None and minute_upload:
             entries = minute_candidate.setdefault('minutes', {})
             correction_key = (int(now) // 60 * 60, device_id, row)
-            if correction_key not in entries and len(entries) >= 4:
-                # A normal 60s correction window spans at most three minutes.
-                # Clock jumps must not create unbounded correction state.
+            if correction_key not in entries and self.minute_correction_count >= MINUTE_CORRECTION_LIMIT:
+                # Omit rather than retain bytes which could not be corrected
+                # if a delayed REDIRECT identity subsequently proves overlap.
                 minute_upload = 0
                 self.minutes.note_gap(now, 'correction_capacity')
         accepted = self.minutes.add(now, device_id, minute_upload, download)
         if accepted and minute_candidate is not None and minute_upload:
+            self.minute_correction_count += int(correction_key not in entries)
             entries[correction_key] = entries.get(correction_key, 0) + minute_upload
         meta['_counted_bucket'], meta['_counted_key'] = bucket, seen_key
         meta['_counted_generation'] = self.seen_generation
@@ -513,8 +549,15 @@ class Collector:
                 self.waiting_metadata.pop(key, None)
             elif key in self.pending_by_digest:
                 self.update_metadata(message)
-        if not self.pending_stats:
+        requested, revision = self.features.metadata_requests()
+        feature_needed = set(requested)
+        if revision != self.feature_recovery_stamp:
+            self.feature_export_checked.clear()
+            self.feature_recovery_stamp = revision
+        self.feature_export_checked.intersection_update(feature_needed)
+        if not self.pending_stats and not feature_needed:
             self.export_error = ''
+            self.features.metadata_error('')
             self.export_checked.clear()
             return
         try:
@@ -522,22 +565,39 @@ class Collector:
             stamp = (stat.st_mtime_ns, stat.st_size)
             if stamp != self.export_stamp:
                 self.export_checked.clear()
+                self.feature_export_checked.clear()
             needed = set(self.pending_by_digest)
             self.export_checked.intersection_update(needed)
-            if needed - self.export_checked:
-                with open(EXPORT_PATH) as handle:
-                    export = json.load(handle)
+            feature_unchecked = feature_needed - self.feature_export_checked
+            if needed - self.export_checked or feature_unchecked:
+                if stat.st_size > MAX_EXPORT_BYTES:
+                    raise ValueError('Netify metadata export exceeds the recovery limit')
+                with open(EXPORT_PATH, 'rb') as handle:
+                    raw = handle.read(MAX_EXPORT_BYTES + 1)
+                if len(raw) > MAX_EXPORT_BYTES:
+                    raise ValueError('Netify metadata export exceeds the recovery limit')
+                export = json.loads(raw)
+                self.features.metadata_error('')
+                feature_scanned = set(feature_unchecked)
                 for iface, flows in export.get('flows', {}).items():
                     if export.get('interfaces', {}).get(iface, {}).get('role') != 'LAN':
                         continue
                     for flow in flows:
-                        if (iface, flow.get('digest')) in needed:
+                        key = (iface, flow.get('digest'))
+                        if key in needed:
                             self.update_metadata({'interface': iface, 'internal': True, 'flow': flow})
+                        if key in feature_unchecked:
+                            if self.features.seed_metadata({'type': 'flow', 'interface': iface, 'internal': True, 'flow': flow}):
+                                self.feature_export_checked.add(key)
+                            else:
+                                feature_scanned.discard(key)
+                self.feature_export_checked.update(feature_scanned)
                 self.export_checked.update(needed)
                 self.export_stamp = stamp
             self.export_error = ''
         except (OSError, ValueError, TypeError, AttributeError) as exc:
             self.export_error = str(exc)
+            self.features.metadata_error(exc)
 
     def write_status(self):
         temp = STATUS_PATH + ".tmp"
@@ -559,6 +619,8 @@ class Collector:
             "proxy_upload": self.proxy_upload,
             "proxy_download": self.proxy_download,
             "minute": dict(self.minutes.counters, error=self.minutes.error,
+                           correction_entries=self.minute_correction_count,
+                           correction_limit=MINUTE_CORRECTION_LIMIT,
                            pending_entries=len(self.minutes.pending)),
             "storage": self.storage.status(),
             "upload": self.upload,

@@ -33,7 +33,23 @@ function guardName(code) {
 		allowlisted: _('Allowlisted'), protected_transport: _('Protected transport'),
 		unsupported_proxy: _('Proxy attribution is unavailable'), shared_transport: _('Shared transport'),
 		not_uploading: _('No current upload evidence'), suppressed: _('Temporarily suppressed'),
+		short_window_only: _('Only short observations are retained for this connection group'),
+		group_capacity: _('Connection group exceeds the observation limit'),
 		identity_unconfirmed: _('Device identity is unconfirmed'), flow_offload: _('Flow offload prevents safe enforcement')
+	};
+	return names[code] || text(code);
+}
+function diagnosticName(code) {
+	var names = {
+		flow_identities: _('Connection identities'), active_groups: _('Full observation windows'),
+		samples: _('Time buckets'), ignored_identities: _('Excluded identities'), recovery_requests: _('Metadata recovery requests'),
+		flow_capacity: _('Connection identity limit'), group_capacity: _('Full-window limit'),
+		device_group_capacity: _('Per-device full-window limit'), group_flow_capacity: _('Connections per group limit'),
+		exclusion_capacity: _('Excluded identity cache limit'), recovery_capacity: _('Metadata recovery limit'),
+		sample_drops: _('Sample storage limit'), missing_metadata: _('Missing connection metadata'),
+		metadata_recovered: _('Metadata baselines recovered'), metadata_resolved: _('Missing identities resolved'),
+		accepted_events: _('Accepted traffic increments'), delayed_events: _('Late or overlong reports'),
+		global: _('All devices'), group: _('One connection group'), unresolved: _('Identity not yet known')
 	};
 	return names[code] || text(code);
 }
@@ -47,8 +63,11 @@ function table(headers, rows) {
 		return E('th', {class: 'th'}, header);
 	}))].concat(rows.length ? rows : [E('tr', {class: 'tr'}, [E('td', {class: 'td', colspan: headers.length}, _('No entries.'))])]));
 }
+var fieldSequence = 0;
 function field(label, input, help) {
-	return E('div', {class: 'cbi-value'}, [E('label', {class: 'cbi-value-title'}, label),
+	var id = 'ap-field-' + (++fieldSequence);
+	input.setAttribute('id', id);
+	return E('div', {class: 'cbi-value'}, [E('label', {class: 'cbi-value-title', 'for': id}, label),
 		E('div', {class: 'cbi-value-field'}, [input, help ? E('p', {class: 'cbi-value-description'}, help) : ''])]);
 }
 function integerInput(value, min, max) {
@@ -92,24 +111,64 @@ return view.extend({
 		this.data = data || {};
 		this.inputs = {};
 		this.notice = E('p', {'aria-live': 'polite'});
-		this.statusPanel = E('div');
-		this.rowsPanel = E('div');
-		this.leasesPanel = E('div');
+		this.statusPanel = E('div', {class: 'ap-status'});
+		this.rowsPanel = E('div', {class: 'ap-table-scroll', tabindex: '0', 'aria-label': _('Scored connections')});
+		this.leasesPanel = E('div', {class: 'ap-table-scroll', tabindex: '0', 'aria-label': _('Temporary connection rules')});
 		this.diagnosticsPanel = E('div');
+		this.devicesPanel = E('div', {class: 'ap-table-scroll', tabindex: '0', 'aria-label': _('Cross-port device observations')});
 		this.saveButton = E('button', {class: 'cbi-button cbi-button-apply', click: this.save.bind(this)}, _('Save Anti-PCDN settings'));
 		this.settingsLoaded = settingsAvailable(this.data);
 		this.formPanel = E('div', {}, this.settingsForm(object(this.data.settings)));
 		this.updateStatus(this.data);
 		poll.add(this.refresh.bind(this), 5);
-		return E('div', {class: 'cbi-map'}, [
+		return E('div', {class: 'cbi-map ap-root'}, [
+			E('style', {}, `
+.ap-root { min-width:0; line-height:1.6; }
+.ap-root * { box-sizing:border-box; }
+.ap-root .ap-card { border:1px solid rgba(127,127,127,.22); border-radius:12px; padding:20px; margin:18px 0; min-width:0; background:transparent; }
+.ap-root .ap-card h3 { margin:0 0 14px; padding:0; background:transparent; color:inherit; border:0; }
+.ap-root .ap-status p { border-left:3px solid #4d9de0; padding:10px 14px; background:rgba(127,127,127,.06); border-radius:4px; overflow-wrap:anywhere; }
+.ap-root .ap-status .warning { border-left-color:#c68b45; }
+.ap-root .ap-settings { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px 24px; border:0; padding:0; margin:0; background:transparent; }
+.ap-root .cbi-value { min-width:0; margin:0; padding:0; background:transparent; }
+.ap-root .cbi-value-title { display:block; float:none; width:auto; text-align:left; padding:0 0 6px; font-weight:600; }
+.ap-root .cbi-value-field { margin:0; padding:0; }
+.ap-root .cbi-value-description { margin:6px 0 0; font-size:12px; line-height:1.6; opacity:.85; }
+.ap-root input:not([type=checkbox]), .ap-root select, .ap-root textarea { width:100%; max-width:100%; min-height:40px; }
+.ap-root textarea { resize:vertical; font-family:monospace; }
+.ap-root input[type=checkbox] { width:22px; height:22px; accent-color:#2f7dd1; }
+.ap-root .ap-lists, .ap-root .ap-weights { grid-column:1/-1; display:grid; gap:16px; grid-template-columns:repeat(3,minmax(0,1fr)); padding-top:18px; border-top:1px solid rgba(127,127,127,.18); }
+.ap-root .ap-weights { grid-template-columns:repeat(5,minmax(0,1fr)); }
+.ap-root .ap-settings>p { grid-column:1/-1; margin:0; font-size:12px; }
+.ap-root .ap-actions { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:20px; }
+.ap-root .ap-actions p:empty { display:none; }
+.ap-root button { min-height:40px; }
+.ap-root .ap-table-scroll { overflow-x:auto; }
+.ap-root table { width:100%; min-width:680px; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+.ap-root .th, .ap-root .td { text-align:left; vertical-align:top; padding:12px; overflow-wrap:anywhere; max-width:340px; }
+.ap-root .table-titles { background:rgba(127,127,127,.06); }
+.ap-root .td { border-top:1px solid rgba(127,127,127,.16); }
+.ap-root .td div+div { margin-top:4px; font-size:12px; }
+.ap-root :focus-visible { outline:2px solid #4d9de0; outline-offset:3px; }
+@media(max-width:720px) {
+ .ap-root .ap-card { padding:14px; }
+ .ap-root .ap-settings, .ap-root .ap-lists { grid-template-columns:minmax(0,1fr); }
+ .ap-root .ap-weights { grid-template-columns:repeat(2,minmax(0,1fr)); }
+ .ap-root input:not([type=checkbox]), .ap-root select, .ap-root textarea { font-size:16px; min-height:44px; }
+ .ap-root .ap-actions button { width:100%; min-height:44px; }
+}
+`),
 			E('h2', {}, _('Anti-PCDN')),
 			E('p', {}, _('Optional short-window scoring for individual LAN connections. Scores indicate suspicion, not proof of PCDN.')),
 			E('p', {}, _('This feature requires the DPI collector to be running. Enabling it does not start paused traffic analysis. It does not add its observations to traffic totals.')),
-			this.statusPanel, this.formPanel, this.saveButton, this.notice,
-			E('h3', {}, _('Scored connections')), this.rowsPanel,
-			E('h3', {}, _('Temporary connection rules')),
-			E('p', {}, _('Installed rules are not proof that traffic was successfully blocked. Observed bytes are DPI observations, not blocked bytes.')),
-			this.leasesPanel, E('h3', {}, _('Coverage and recent actions')), this.diagnosticsPanel
+			this.statusPanel,
+			E('section', {class: 'ap-card'}, [this.formPanel, E('div', {class: 'ap-actions'}, [this.saveButton, this.notice])]),
+			E('section', {class: 'ap-card'}, [E('h3', {}, _('Cross-port device observations')),
+				E('p', {}, _('Device scores combine observations across local ports. They do not authorize blocking; individual connections still require complete evidence and all enforcement checks.')), this.devicesPanel]),
+			E('section', {class: 'ap-card'}, [E('h3', {}, _('Scored connections')), this.rowsPanel]),
+			E('section', {class: 'ap-card'}, [E('h3', {}, _('Temporary connection rules')),
+				E('p', {}, _('Installed rules are not proof that traffic was successfully blocked. Observed bytes are DPI observations, not blocked bytes.')), this.leasesPanel]),
+			E('section', {class: 'ap-card'}, [E('h3', {}, _('Coverage and recent actions')), this.diagnosticsPanel])
 		]);
 	},
 	settingsForm: function(settings) {
@@ -143,7 +202,10 @@ return view.extend({
 			fields.push(field(reasonName(key), input['weight_' + key]));
 		});
 		fields.push(E('p', {}, _('Each score weight is 0–40; all five weights must total 100. The maximum score is 100.')));
-		return E('div', {class: 'cbi-section'}, fields);
+		return E('div', {class: 'cbi-section ap-settings'}, fields.slice(0, 5).concat([
+			E('div', {class: 'ap-lists'}, fields.slice(5, 8)),
+			E('div', {class: 'ap-weights'}, fields.slice(8, 13)), fields[13]
+		]));
 	},
 	settingsValue: function() {
 		var inputs = this.inputs, result = {enabled: inputs.enabled.checked, mode: inputs.mode.value,
@@ -228,11 +290,30 @@ return view.extend({
 				messages.push(E('p', {class: 'alert-message warning'}, _('Runtime status is stale or unavailable. Listed rules may have expired; release is disabled.')));
 			if (runtime.mode === 'observe') messages.push(E('p', {}, _('Observation only: threshold crossings do not install rules.')));
 		}
-		(data.request_error ? [data.request_error] : [data.config_error, data.runtime_error, runtime.error, runtime.executor_error]).filter(Boolean).forEach(function(error) {
+		(data.request_error ? [data.request_error] : [data.config_error, data.runtime_error, runtime.error, runtime.executor_error, runtime.metadata_error]).filter(Boolean).forEach(function(error) {
 			messages.push(E('p', {class: 'alert-message warning'}, text(error)));
 		});
 		if (available && data.release_pending) messages.push(E('p', {}, _('A release request is pending.')));
+		var coverage = object(runtime.coverage);
+		if (available && data.stale === false && settings.enabled === true &&
+			(Number(coverage.global_wait_seconds) > 0 || Number(coverage.unresolved_metadata) > 0))
+			messages.push(E('p', {class: 'alert-message warning'}, _('Observation coverage is incomplete. Low scores do not rule out suspicious traffic.')));
 		dom.content(this.statusPanel, messages);
+		var deviceRows = list(runtime.devices).slice(0, 20).map(function(device) {
+			device = object(device);
+			var metrics = object(device.metrics);
+			return E('tr', {class: 'tr'}, [
+				E('td', {class: 'td'}, [E('div', {}, text(device.mac)), E('div', {}, text(device.ip)),
+					E('div', {}, (device.proto === 6 ? 'TCP' : device.proto === 17 ? 'UDP' : text(device.proto)) + ' · ' + _('Local ports:') + ' ' + text(device.ports))]),
+				E('td', {class: 'td'}, [E('strong', {}, text(device.score) + '/100'),
+					E('div', {}, list(device.reasons).map(function(reason) { return reasonName(reason.id) + ': +' + text(reason.points); }).join(', '))]),
+				E('td', {class: 'td'}, [E('div', {}, _('Upload:') + ' ' + bytes(metrics.upload)),
+					E('div', {}, _('Download:') + ' ' + bytes(metrics.download)), E('div', {}, _('Peers:') + ' ' + text(metrics.peers))]),
+				E('td', {class: 'td'}, [E('div', {}, _('Observation only')),
+					E('div', {}, !available || data.stale !== false ? _('Runtime status is unavailable.') : device.complete === true && !(Number(coverage.global_wait_seconds) > 0 || Number(coverage.unresolved_metadata) > 0) ? _('Complete observation window') : _('Partial observation'))])
+			]);
+		});
+		dom.content(this.devicesPanel, table([_('Device and connection'), _('Score and evidence'), _('Observed bytes'), _('Decision and guards')], deviceRows));
 		var rows = list(runtime.candidates).slice(0, 64).map(function(row) {
 			row = object(row);
 			var reasons = list(row.reasons).map(function(reason) { return reasonName(reason.id) + ': +' + text(reason.points); }).join(', ');
@@ -243,7 +324,9 @@ return view.extend({
 				E('td', {class: 'td'}, [E('div', {}, text(row.mac)), E('div', {}, tuple(row)), E('div', {}, text(row.host))]),
 				E('td', {class: 'td'}, [E('strong', {}, text(row.score) + '/100'), E('div', {}, reasons)]),
 				E('td', {class: 'td'}, [E('div', {}, _('Upload:') + ' ' + bytes(row.upload)), E('div', {}, _('Download:') + ' ' + bytes(row.download))]),
-				E('td', {class: 'td'}, [E('div', {}, decision), E('div', {}, guards), E('div', {}, text(row.execution_error))])
+				E('td', {class: 'td'}, [E('div', {}, decision), E('div', {}, guards),
+					Number(row.wait_seconds) > 0 ? E('div', {}, _('Window wait:') + ' ' + Math.ceil(row.wait_seconds) + ' ' + _('seconds remaining')) : '',
+					E('div', {}, text(row.execution_error))])
 			]);
 		});
 		dom.content(this.rowsPanel, table([_('Device and connection'), _('Score and evidence'), _('Observed bytes'), _('Decision and guards')], rows));
@@ -263,14 +346,26 @@ return view.extend({
 		dom.content(this.leasesPanel, table([_('Device and connection'), _('Rule state'), _('Time remaining'), _('Action')], leaseRows));
 		var diagnostics = [];
 		if (runtime.timestamp) diagnostics.push(E('p', {}, _('Last runtime update:') + ' ' + new Date(Number(runtime.timestamp) * 1000).toLocaleString()));
+		if (runtime.coverage) {
+			diagnostics.push(E('p', {}, _('Unresolved connection metadata:') + ' ' + text(coverage.unresolved_metadata)));
+			diagnostics.push(E('p', {}, _('Global window wait:') + ' ' + text(coverage.global_wait_seconds) + ' ' + _('seconds remaining')));
+			if (coverage.last_gap) diagnostics.push(E('p', {}, _('Last observation gap:') + ' ' + diagnosticName(coverage.last_gap) + ' · ' + diagnosticName(coverage.last_gap_scope)));
+			var resources = object(coverage.resources);
+			diagnostics.push(table([_('Resource'), _('In use'), _('Limit')], Object.keys(resources).slice(0, 16).map(function(key) {
+				var resource = object(resources[key]);
+				return E('tr', {class: 'tr'}, [E('td', {class: 'td'}, diagnosticName(key)), E('td', {class: 'td'}, text(resource.used)), E('td', {class: 'td'}, text(resource.limit))]);
+			})));
+		}
+		var counters = [E('p', {}, _('These are cumulative event counts, not packets or bytes. Categories may overlap.'))];
 		Object.keys(object(runtime.counters)).sort().slice(0, 64).forEach(function(key) {
-			diagnostics.push(E('div', {}, key + ': ' + text(runtime.counters[key])));
+			counters.push(E('div', {}, diagnosticName(key) + ': ' + text(runtime.counters[key])));
 		});
 		Object.keys(object(runtime.engine_counters)).sort().slice(0, 64).forEach(function(key) {
-			diagnostics.push(E('div', {}, _('Scoring:') + ' ' + key + ': ' + text(runtime.engine_counters[key])));
+			counters.push(E('div', {}, diagnosticName(key) + ': ' + text(runtime.engine_counters[key])));
 		});
 		if (runtime.queue_depth != null) diagnostics.push(E('div', {}, _('Queued observations:') + ' ' + text(runtime.queue_depth)));
-		if (runtime.coverage) diagnostics.push(E('pre', {}, JSON.stringify(runtime.coverage, null, 2)));
+		if (Object.keys(object(runtime.counters)).length || Object.keys(object(runtime.engine_counters)).length)
+			diagnostics.push(E('details', {}, [E('summary', {}, _('Cumulative diagnostic counters')), E('div', {}, counters)]));
 		list(runtime.events).slice(-20).reverse().forEach(function(event) {
 			var labels = {released: _('Rule released'), release_failed: _('Rule release failed'), lease_installed: _('Rule installed')};
 			diagnostics.push(E('div', {}, labels[event.kind] || text(event.kind)));

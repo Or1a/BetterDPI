@@ -1221,3 +1221,111 @@ msgstr "未采集"
 
 msgid "Partial observation"
 msgstr "部分采集"
+
+msgid "Accepted traffic increments"
+msgstr "已接受的流量增量"
+
+msgid "Complete observation window"
+msgstr "观察窗口完整"
+
+msgid "Connection group exceeds the observation limit"
+msgstr "连接组超出观察上限"
+
+msgid "Connection identities"
+msgstr "连接身份记录"
+
+msgid "Connection identity limit"
+msgstr "连接身份记录达到上限"
+
+msgid "Connections per group limit"
+msgstr "组内连接数达到上限"
+
+msgid "Cross-port device observations"
+msgstr "设备跨端口观察"
+
+msgid "Cumulative diagnostic counters"
+msgstr "累计诊断计数"
+
+msgid "Device scores combine observations across local ports. They do not authorize blocking; individual connections still require complete evidence and all enforcement checks."
+msgstr "设备分数汇总多个本地端口的行为，仅用于观察。自动拦截仍要求具体连接证据完整，并通过所有处置检查。"
+
+msgid "Excluded identities"
+msgstr "排除的连接身份"
+
+msgid "Excluded identity cache limit"
+msgstr "排除记录缓存达到上限"
+
+msgid "Full observation windows"
+msgstr "完整评分窗口"
+
+msgid "Full-window limit"
+msgstr "完整评分窗口达到上限"
+
+msgid "Global window wait:"
+msgstr "全局窗口等待："
+
+msgid "Identity not yet known"
+msgstr "尚未确认身份"
+
+msgid "In use"
+msgstr "已使用"
+
+msgid "Last observation gap:"
+msgstr "最近采集缺口："
+
+msgid "Late or overlong reports"
+msgstr "迟到或时间跨度过长的报告"
+
+msgid "Limit"
+msgstr "上限"
+
+msgid "Local ports:"
+msgstr "本地端口数："
+
+msgid "Metadata baselines recovered"
+msgstr "已恢复元数据基线"
+
+msgid "Metadata recovery limit"
+msgstr "元数据恢复请求达到上限"
+
+msgid "Metadata recovery requests"
+msgstr "元数据恢复请求"
+
+msgid "Missing connection metadata"
+msgstr "缺少连接元数据"
+
+msgid "Missing identities resolved"
+msgstr "已补全缺失身份"
+
+msgid "Observation coverage is incomplete. Low scores do not rule out suspicious traffic."
+msgstr "观察覆盖不完整，低分不能排除可疑流量。"
+
+msgid "One connection group"
+msgstr "单个连接组"
+
+msgid "Only short observations are retained for this connection group"
+msgstr "此连接组目前仅保留短期观察"
+
+msgid "Peers:"
+msgstr "对端数："
+
+msgid "Per-device full-window limit"
+msgstr "单设备完整评分窗口达到上限"
+
+msgid "Resource"
+msgstr "资源"
+
+msgid "Sample storage limit"
+msgstr "样本存储达到上限"
+
+msgid "These are cumulative event counts, not packets or bytes. Categories may overlap."
+msgstr "以下为累计事件次数，不是数据包或字节数，各项可能重叠。"
+
+msgid "Time buckets"
+msgstr "时间样本"
+
+msgid "Unresolved connection metadata:"
+msgstr "待恢复连接元数据："
+
+msgid "Window wait:"
+msgstr "窗口等待："

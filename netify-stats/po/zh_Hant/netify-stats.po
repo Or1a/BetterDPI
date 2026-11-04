@@ -1221,3 +1221,111 @@ msgstr "未採集"
 
 msgid "Partial observation"
 msgstr "部分採集"
+
+msgid "Accepted traffic increments"
+msgstr "已接受的流量增量"
+
+msgid "Complete observation window"
+msgstr "觀察視窗完整"
+
+msgid "Connection group exceeds the observation limit"
+msgstr "連線群組超出觀察上限"
+
+msgid "Connection identities"
+msgstr "連線身分紀錄"
+
+msgid "Connection identity limit"
+msgstr "連線身分紀錄達到上限"
+
+msgid "Connections per group limit"
+msgstr "群組內連線數達到上限"
+
+msgid "Cross-port device observations"
+msgstr "裝置跨連接埠觀察"
+
+msgid "Cumulative diagnostic counters"
+msgstr "累計診斷計數"
+
+msgid "Device scores combine observations across local ports. They do not authorize blocking; individual connections still require complete evidence and all enforcement checks."
+msgstr "裝置分數彙總多個本機連接埠的行為，僅用於觀察。自動攔截仍要求個別連線證據完整，並通過所有處置檢查。"
+
+msgid "Excluded identities"
+msgstr "排除的連線身分"
+
+msgid "Excluded identity cache limit"
+msgstr "排除紀錄快取達到上限"
+
+msgid "Full observation windows"
+msgstr "完整評分視窗"
+
+msgid "Full-window limit"
+msgstr "完整評分視窗達到上限"
+
+msgid "Global window wait:"
+msgstr "全域視窗等待："
+
+msgid "Identity not yet known"
+msgstr "尚未確認身分"
+
+msgid "In use"
+msgstr "已使用"
+
+msgid "Last observation gap:"
+msgstr "最近採集缺口："
+
+msgid "Late or overlong reports"
+msgstr "延遲或時間跨度過長的報告"
+
+msgid "Limit"
+msgstr "上限"
+
+msgid "Local ports:"
+msgstr "本機連接埠數："
+
+msgid "Metadata baselines recovered"
+msgstr "已恢復中繼資料基準"
+
+msgid "Metadata recovery limit"
+msgstr "中繼資料恢復請求達到上限"
+
+msgid "Metadata recovery requests"
+msgstr "中繼資料恢復請求"
+
+msgid "Missing connection metadata"
+msgstr "缺少連線中繼資料"
+
+msgid "Missing identities resolved"
+msgstr "已補全缺失身分"
+
+msgid "Observation coverage is incomplete. Low scores do not rule out suspicious traffic."
+msgstr "觀察涵蓋不完整，低分不能排除可疑流量。"
+
+msgid "One connection group"
+msgstr "單一連線群組"
+
+msgid "Only short observations are retained for this connection group"
+msgstr "此連線群組目前僅保留短期觀察"
+
+msgid "Peers:"
+msgstr "對端數："
+
+msgid "Per-device full-window limit"
+msgstr "單一裝置完整評分視窗達到上限"
+
+msgid "Resource"
+msgstr "資源"
+
+msgid "Sample storage limit"
+msgstr "樣本儲存達到上限"
+
+msgid "These are cumulative event counts, not packets or bytes. Categories may overlap."
+msgstr "以下為累計事件次數，不是封包或位元組數，各項可能重疊。"
+
+msgid "Time buckets"
+msgstr "時間樣本"
+
+msgid "Unresolved connection metadata:"
+msgstr "待恢復連線中繼資料："
+
+msgid "Window wait:"
+msgstr "視窗等待："

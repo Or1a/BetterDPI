@@ -59,6 +59,102 @@ class FakeFirewall:
 
 
 class RuntimeTest(unittest.TestCase):
+    def test_requested_export_recovery_does_not_replay_cumulative_traffic(self):
+        import netify_collector as collector
+        from anti_pcdn.engine import Engine
+        from test_minutes import CollectorMinuteTests
+        self.worker.engine = Engine(self.settings, now=self.now)
+        self.worker.submit(self.event(last_seen_at=int(self.wall * 1000), total_bytes=110))
+        self.worker.consume(self.worker.queue.get_nowait())
+        self.worker.publish(self.now)
+        self.assertEqual(self.worker.recovery_keys, (('br-lan', 'x'),))
+        raw = dict(digest='x', first_seen_at=int((self.wall - 30) * 1000),
+                   last_seen_at=int(self.wall * 1000), total_bytes=10000,
+                   local_bytes=10000, other_bytes=0,
+                   local_mac='02:11:22:33:44:55', local_ip='192.168.1.2',
+                   other_ip='8.8.8.8', local_port=8500, other_port=443,
+                   ip_protocol=17, other_type='remote')
+        bridge = FeatureBridge()
+        bridge.worker, bridge.active = self.worker, True
+        export_path = os.path.join(self.directory.name, 'export.json')
+        with open(export_path, 'w') as handle:
+            json.dump({'interfaces': {'br-lan': {'role': 'LAN'}}, 'flows': {'br-lan': [raw]}}, handle)
+        with patch.object(collector.FeatureBridge, 'tick', return_value=None), \
+                patch.object(collector, 'EXPORT_PATH', export_path), \
+                CollectorMinuteTests().collector() as instance:
+            instance.features = bridge
+            instance.recover_metadata()
+            self.assertEqual(self.worker.queue.qsize(), 1)
+            instance.recover_metadata()
+            self.assertEqual(self.worker.queue.qsize(), 1)  # Same export isn't queued again.
+            self.assertEqual(instance.db.execute('SELECT SUM(upload) FROM hourly').fetchone()[0], None)
+            self.worker.consume(self.worker.queue.get_nowait())
+            flow = self.worker.engine.flows[('br-lan', 'x')]
+            self.assertEqual(flow.total, 10000)
+            self.assertFalse(flow.samples)
+            self.now += 10
+            self.wall += 10
+            event = self.event(total_bytes=11020, last_seen_at=int(self.wall * 1000))
+            event['flow'].update(local_bytes=1000, other_bytes=20)
+            for _ in range(2):
+                self.worker.submit(event)
+                self.worker.consume(self.worker.queue.get_nowait())
+            self.assertEqual(sum(sample[1] for sample in flow.samples), 1000)
+            self.assertEqual(self.worker.engine.counters['duplicates'], 1)
+            self.assertEqual(instance.db.execute('SELECT SUM(upload) FROM hourly').fetchone()[0], None)
+            self.worker.publish(self.now)
+            self.assertEqual(self.worker.recovery_keys, ())
+
+    def test_missing_export_is_reported_without_stopping_live_collection(self):
+        import netify_collector as collector
+        from anti_pcdn.engine import Engine
+        from test_minutes import CollectorMinuteTests
+        self.worker.engine = Engine(self.settings, now=self.now)
+        self.worker.submit(self.event(last_seen_at=int(self.wall * 1000), total_bytes=110))
+        self.worker.consume(self.worker.queue.get_nowait())
+        self.worker.publish(self.now)
+        bridge = FeatureBridge()
+        bridge.worker, bridge.active = self.worker, True
+        with patch.object(collector.FeatureBridge, 'tick', return_value=None), \
+                patch.object(collector, 'EXPORT_PATH', os.path.join(self.directory.name, 'absent.json')), \
+                CollectorMinuteTests().collector() as instance:
+            instance.features = bridge
+            instance.recover_metadata()
+            self.assertTrue(instance.export_error)
+            self.assertTrue(self.worker.recovery_error)
+            self.assertTrue(bridge.active)
+            self.assertFalse(self.worker.stopping.is_set())
+
+        export_path = os.path.join(self.directory.name, 'invalid-export.json')
+        malformed = {'interfaces': {'br-lan': {'role': 'LAN'}}, 'flows': {'br-lan': [
+            {'digest': 'x', 'detected_protocol_name': 'x' * 513}]}}
+        for oversized in (True, False):
+            with self.subTest(oversized=oversized):
+                with open(export_path, 'w') as handle:
+                    if oversized:
+                        handle.truncate(collector.MAX_EXPORT_BYTES + 1)
+                    else:
+                        json.dump(malformed, handle)
+                with patch.object(collector.FeatureBridge, 'tick', return_value=None), \
+                        patch.object(collector, 'EXPORT_PATH', export_path), \
+                        CollectorMinuteTests().collector() as instance:
+                    instance.features = bridge
+                    instance.recover_metadata()
+                    self.assertTrue(self.worker.recovery_error)
+                    self.assertEqual(self.worker.queue.qsize(), 0)
+                    self.assertEqual(len(self.worker.engine.missing), 1)
+                    self.assertTrue(bridge.active)
+
+    def test_seed_queue_backpressure_does_not_claim_lost_live_increments(self):
+        self.worker.recovery_keys = (('br-lan', 'x'),)
+        for _ in range(QUEUE_LIMIT):
+            self.worker.submit(self.event())
+        generation = self.worker.generation
+        self.assertFalse(self.worker.seed_metadata(self.event()))
+        self.assertEqual(self.worker.generation, generation)
+        self.assertEqual(self.worker.counters['recovery_deferred'], 1)
+        self.assertEqual(self.worker.counters['queue_dropped'], 0)
+
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)

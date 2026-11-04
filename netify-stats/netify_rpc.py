@@ -16,7 +16,7 @@ from netify_update import read_status, start_check, start_install
 from netify_wan import query_wan
 from netify_minute import query_series
 
-VERSION = "0.4.1"
+VERSION = "0.4.2"
 
 
 DB_PATH = "/tmp/netify-stats/stats.db"

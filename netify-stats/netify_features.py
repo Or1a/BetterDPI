@@ -77,6 +77,22 @@ class FeatureBridge:
                 self.worker.connected = connected
                 self.worker.gap('collector_reconnected' if connected else 'collector_disconnected')
 
+    def metadata_requests(self):
+        if not self.active or self.worker is None:
+            return (), None
+        # Immutable worker snapshots; never iterate its live engine dictionaries
+        # from the collector thread.
+        return self.worker.recovery_keys, (id(self.worker), self.worker.recovery_revision)
+
+    def seed_metadata(self, message):
+        if self.active and self.worker:
+            return self.worker.seed_metadata(message)
+        return False
+
+    def metadata_error(self, error):
+        if self.active and self.worker:
+            self.worker.recovery_error = str(error)[:256]
+
     def close(self):
         self.active = False
         if self.worker:

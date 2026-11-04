@@ -8,22 +8,22 @@ V0.3.2 新增 WAN 独立分项账、设备侧 VPN 子集和隧道接口计数，
 
 主线源码新增默认关闭的实验性 Anti-PCDN：独立页面、短期行为评分、白名单和有期限的连接级自动封禁，复用当前 Netify 采集。使用条件、阈值及限制见 [Anti-PCDN 说明](docs/anti-pcdn-design.md)。
 
-## V0.4.1 试用版 / Trial release
+## V0.4.2 试用版 / Trial release
 
-V0.4.1 修复 Anti-PCDN 页面因 LuCI 会话参数被拒绝而无法读取状态、保存设置或解除规则的问题；读取失败时明确显示未知状态，不再把默认值当作采集器的实际状态。同时新增真实设备分钟记录，趋势图默认显示最近 60 分钟的上传／下载并列柱状图。图表时间范围独立于总量和排行榜，详见[分钟趋势说明](docs/minute-trend.md)。
+V0.4.2 修复诊断日志暴露的 Anti-PCDN 覆盖问题：普通小流量端口不再占满上传评分名额，缺失连接身份可从现有 Netify 导出恢复，已知局部缺口只影响相关连接组。新增跨端口设备观察分和当前资源占用，避免把低分误读为无风险。持续 TCP 上传的分钟图不再在四个分钟条目后漏记，迟到代理纠正仍保持去重。
 
-V0.4.1 已按 GitHub **预发布（Pre-release）**提供下载。两个官方 SDK 构建、下载附件与标签源码核对，以及包内只读 RPC 检查均已通过，见 [V0.4.1 发布页](https://github.com/Or1a/BetterDPI/releases/tag/V0.4.1)和[验证记录](docs/minute-trend.md#试用发布校验)。稳定版仍为 V0.3.2，`releases/latest` 与应用内更新不会自动切换到试用版。
+本版本继续按 GitHub **预发布（Pre-release）**提供试用。发布流水线生成两个官方 SDK 包后上传至 [V0.4.2 发布页](https://github.com/Or1a/BetterDPI/releases/tag/V0.4.2)，修复和验证范围见[本轮记录](docs/anti-pcdn-042-fixes.md)。稳定版仍为 V0.3.2，`releases/latest` 与应用内更新不会自动提供试用版。
 
-| OpenWrt | V0.4.1 试用包 |
+| OpenWrt | V0.4.2 试用包 |
 | --- | --- |
-| 24.10（IPK） | [BetterDPI-openwrt-24.10-all.ipk](https://github.com/Or1a/BetterDPI/releases/download/V0.4.1/BetterDPI-openwrt-24.10-all.ipk) |
-| 25.12（APK） | [BetterDPI-openwrt-25.12-all.apk](https://github.com/Or1a/BetterDPI/releases/download/V0.4.1/BetterDPI-openwrt-25.12-all.apk) |
+| 24.10（IPK） | [BetterDPI-openwrt-24.10-all.ipk](https://github.com/Or1a/BetterDPI/releases/download/V0.4.2/BetterDPI-openwrt-24.10-all.ipk) |
+| 25.12（APK） | [BetterDPI-openwrt-25.12-all.apk](https://github.com/Or1a/BetterDPI/releases/download/V0.4.2/BetterDPI-openwrt-25.12-all.apk) |
 
-V0.4.0 用户也需手动下载同一发布页的包和 `SHA256SUMS`，按[试用版安装说明](INSTALL.md#v041-试用版)覆盖安装，无需先卸载。升级后刷新 LuCI；分钟记录从新版本采集开始，旧小时记录不会拆成虚构的分钟数据。
+V0.4.0 / V0.4.1 用户需手动下载同一发布页的包和 `SHA256SUMS`，按[试用版安装说明](INSTALL.md#v042-试用版)覆盖安装，无需先卸载。升级后强制刷新 LuCI；旧分钟漏记不会凭空补回，保留的历史统计不会重复计入。
 
-Anti-PCDN 仍默认关闭。首次试用可打开 **状态 → Anti-PCDN**，选择实际 LAN 接口并开启「仅观察」；保持 DPI 采集运行，等待至少 5 分钟后检查评分、缺失计数和白名单。如需自动处置，再选择「自动封禁」；初始参数为 **80 分、120 秒**，还须通过连接身份和执行路径检查。试用参数尚未经过真实业务准确率校准。
+Anti-PCDN 默认关闭，已有设置保留。首次试用打开 **状态 → Anti-PCDN**，选择实际 LAN 接口并开启「仅观察」；保持 DPI 采集运行，等上传连接获得完整 5 分钟观察窗口后查看评分与覆盖。跨端口设备分仅用于观察，不会直接封整台设备；自动处置仍要求具体连接达到阈值并通过所有保护检查，默认 **80 分、120 秒**。试用参数尚未经过真实业务准确率校准。
 
-V0.4.1 fixes LuCI session-parameter handling and adds real device-minute history with paired upload/download bars. Trial packages are available at the tag-specific links above. Both official SDK builds, downloaded package contents and read-only packaged RPC checks passed; real-router validation remains pending. V0.4.0 users should upgrade manually; stable downloads and the in-app updater remain on V0.3.2. Anti-PCDN remains disabled by default.
+V0.4.2 fixes upload-window starvation, recovers missing identities without replaying traffic, scopes known gaps, and adds observation-only device scores across ports. It also fixes omitted minute uploads on long-lived TCP flows and improves the UI. Trial packages use the tag-specific links above; the stable updater remains on V0.3.2. Real-router detection accuracy and long-term load still require validation.
 
 ## Features
 
@@ -67,7 +67,7 @@ Fixed download filenames and an in-app update manifest are available. See the [G
 
 ## Command-line download
 
-These commands download the stable V0.3.2 packages. Run the command matching your router's OpenWrt version. It downloads the package to `/tmp` and verifies its SHA-256 checksum; it does not install anything. For the V0.4.1 trial, use the tag-specific links above and the [trial installation steps](INSTALL.md#v041-试用版).
+These commands download the stable V0.3.2 packages. Run the command matching your router's OpenWrt version. It downloads the package to `/tmp` and verifies its SHA-256 checksum; it does not install anything. For the V0.4.2 trial, use the tag-specific links above and the [trial installation steps](INSTALL.md#v042-试用版).
 
 OpenWrt 24.10.8 (IPK):
 
@@ -83,7 +83,7 @@ wget -O /tmp/BetterDPI-0.3.2-openwrt-25.12.5-all.apk 'https://github.com/Or1a/Be
 
 ## 命令行下载
 
-上方命令用于稳定版 V0.3.2。在对应版本的 OpenWrt 路由器上运行一条命令，安装包会下载到 `/tmp` 并校验 SHA-256；命令不会自动安装。V0.4.1 请使用前面的试用链接及[对应安装步骤](INSTALL.md#v041-试用版)。
+上方命令用于稳定版 V0.3.2。在对应版本的 OpenWrt 路由器上运行一条命令，安装包会下载到 `/tmp` 并校验 SHA-256；命令不会自动安装。V0.4.2 请使用前面的试用链接及[对应安装步骤](INSTALL.md#v042-试用版)。
 
 ## Installation
 

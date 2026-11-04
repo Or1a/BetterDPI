@@ -61,6 +61,33 @@ const releaseButton=ui=>ui.view.leasesPanel.querySelector('button');
  assert(text(enabledMissing.view.statusPanel).includes('No recent DPI collector heartbeat'));
  assert(text(enabledMissing.view.statusPanel).includes('Runtime status is stale or unavailable.'));
 
+ // Device-level multi-port evidence stays explicitly observational, with
+ // connection scores and incomplete coverage independently visible.
+ const crossPort=base();
+ crossPort.settings={...defaults,enabled:true,mode:'auto'};
+ crossPort.runtime.mode='auto';
+ crossPort.runtime.devices=[{mac:'02:11:22:33:44:55',ip:'10.0.0.2',proto:17,ports:20,score:80,
+  complete:true,observation_only:true,reasons:[{id:'fanout',points:25}],metrics:{upload:8*1024*1024,download:1000,peers:20}}];
+ crossPort.runtime.candidates=[{id,score:0,device_score:80,threshold_met:false,guards:['short_window_only'],wait_seconds:15}];
+ crossPort.runtime.coverage={global_wait_seconds:200,unresolved_metadata:2,last_gap:'missing_metadata',last_gap_scope:'unresolved',
+  resources:{active_groups:{used:1,limit:512},flow_identities:{used:33,limit:2048}}};
+ const observed=setup(crossPort);
+ assert(text(observed.view.devicesPanel).includes('80/100'));
+ assert(text(observed.view.devicesPanel).includes('Observation only'));
+ assert(text(observed.root).includes('They do not authorize blocking'));
+ assert(text(observed.view.rowsPanel).includes('0/100'));
+ assert(text(observed.view.rowsPanel).includes('Below threshold'));
+ assert(text(observed.view.rowsPanel).includes('Window wait: 15 seconds remaining'));
+ assert(text(observed.view.statusPanel).includes('Low scores do not rule out suspicious traffic'));
+ assert(!text(observed.view.devicesPanel).includes('Complete observation window'));
+ assert(text(observed.view.diagnosticsPanel).includes('Connection identities'));
+ assert(text(observed.view.diagnosticsPanel).includes('2048'));
+ assert.deepEqual(observed.calls,[]);
+ crossPort.stale=true;
+ await observed.view.refresh();
+ assert(!text(observed.view.devicesPanel).includes('Complete observation window'));
+ assert(text(observed.view.devicesPanel).includes('Runtime status is unavailable.'));
+
  // Evidence strings must remain text nodes; no generated HTML or arbitrary
  // links are used for domains, addresses, scores or daemon error messages.
  const raw='<img src=x onerror=alert(1)>';

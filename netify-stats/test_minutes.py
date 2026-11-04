@@ -196,6 +196,62 @@ class MinuteTests(unittest.TestCase):
 
 
 class CollectorMinuteTests(unittest.TestCase):
+    def test_continuous_tcp_upload_survives_four_minutes_and_late_reconciliation(self):
+        with self.collector() as instance:
+            with patch.object(collector.time, 'monotonic', return_value=100):
+                instance.update_metadata(self.metadata('original'))
+            for second in range(5, 360, 10):
+                with patch.object(collector.time, 'monotonic', return_value=100 + second):
+                    instance.add_stats(self.event('original'), received_at=BASE + second)
+                    instance.expire_original_candidates()
+                    instance.minutes.flush(BASE + second)
+                    instance.db.commit()
+            self.assertEqual(instance.db.execute('SELECT SUM(upload),SUM(download) FROM hourly').fetchone(), (3600, 7200))
+            self.assertEqual(instance.db.execute('SELECT SUM(upload),SUM(download) FROM device_minutes').fetchone(), (3600, 7200))
+            self.assertEqual(instance.minutes.counters['correction_capacity'], 0)
+            self.assertEqual(instance.minute_correction_count, 6)
+            with patch.object(collector.time, 'monotonic', return_value=456):
+                instance.reconcile_original('br-lan', (6, '10.1.1.2', 12345, '203.0.113.4', 443))
+            instance.minutes.flush(BASE + 356)
+            self.assertEqual(instance.minute_correction_count, 0)
+            self.assertEqual(instance.db.execute('SELECT SUM(upload),SUM(download) FROM device_minutes').fetchone(), (0, 7200))
+
+    def test_minute_correction_history_rolls_with_retention_and_clock_rollback(self):
+        with self.collector() as instance:
+            instance.update_metadata(self.metadata())
+            for number in range(125):
+                instance.add_stats(self.event(), received_at=BASE + number * 60)
+                instance.minutes.flush(BASE + number * 60)
+                instance.db.commit()
+            self.assertEqual(instance.minute_correction_count, 120)
+            self.assertEqual(instance.db.execute('SELECT SUM(upload) FROM device_minutes').fetchone()[0], 12000)
+            instance.add_stats(self.event(), received_at=BASE + 123 * 60)
+            instance.minutes.flush(BASE + 123 * 60)
+            self.assertEqual(instance.minute_correction_count, 119)
+            self.assertEqual(instance.db.execute('SELECT SUM(upload) FROM device_minutes').fetchone()[0], 12000)
+            instance.reconcile_original('br-lan', (6, '10.1.1.2', 12345, '203.0.113.4', 443))
+            instance.minutes.flush(BASE + 123 * 60)
+            self.assertEqual(instance.db.execute('SELECT SUM(upload) FROM device_minutes').fetchone()[0], 0)
+            self.assertEqual(instance.minute_correction_count, 0)
+
+    def test_correction_budget_is_shared_bounded_and_reclaimed_on_expiry(self):
+        with self.collector() as instance, patch.object(collector, 'MINUTE_CORRECTION_LIMIT', 2):
+            with patch.object(collector.time, 'monotonic', return_value=100):
+                instance.update_metadata(self.metadata())
+                instance.add_stats(self.event(), received_at=BASE)
+                instance.add_stats(self.event(), received_at=BASE + 60)
+                instance.add_stats(self.event(), received_at=BASE + 120)
+                # Download-only observations must not claim omitted uploads.
+                instance.add_stats(self.event(upload=0), received_at=BASE + 120)
+            instance.minutes.flush(BASE + 120)
+            self.assertEqual(instance.minutes.counters['correction_capacity'], 1)
+            self.assertEqual(instance.minute_correction_count, 2)
+            self.assertEqual(instance.db.execute('SELECT SUM(upload),SUM(download) FROM device_minutes').fetchone(), (200, 800))
+            self.assertEqual(instance.db.execute('SELECT SUM(upload),SUM(download) FROM hourly').fetchone(), (300, 800))
+            with patch.object(collector.time, 'monotonic', return_value=161):
+                instance.expire_original_candidates()
+            self.assertEqual(instance.minute_correction_count, 0)
+
     @contextmanager
     def collector(self):
         with tempfile.TemporaryDirectory() as directory, \
