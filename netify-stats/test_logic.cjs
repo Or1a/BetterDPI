@@ -2,8 +2,8 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const source = fs.readFileSync(__dirname + '/netify-stats.js', 'utf8');
-const {translator, setup, base, walk, text} = require('./test_ui_helpers.cjs');
-const chartDocument = {documentElement:{lang:'zh-Hans'}};
+const {translator, setup, base, walk, text, E} = require('./test_ui_helpers.cjs');
+const chartDocument = {documentElement:{lang:'zh-Hans'}, createElementNS: (_ns, tag) => E(tag)};
 const helpers = new Function('rpc','dom','E','document','_',source.split('return view.extend({')[0] + '\nreturn {timeline, trafficBar};')(
  {declare:()=>{}}, {content:(node,value)=>{node.children=value;}}, (tag,attrs,children)=>({tag,attrs,children}),chartDocument,translator('zh-Hans'));
 const chart = helpers.timeline([{bucket:1700000000,download:100,upload:0},{bucket:1700003600,download:50,upload:25}],3600);
@@ -17,14 +17,35 @@ assert(!source.includes('实际起点'));
 assert(!source.includes('末组尚未结束'));
 assert(!source.includes('每组 '));
 assert.equal(scroll.attrs['data-ns-scroll'],'traffic-trend');
-assert.equal(plot.children.length,2);
-assert.equal(plot.children[0].tag,'button');
-assert.equal(plot.children[0].children[0].attrs.class,'ns-trend-bars');
-assert.deepEqual(plot.children.map(column=>column.children[0].children.map(bar=>bar.attrs.style)),
- [['height:100%','height:0%'],['height:50%','height:25%']]);
-assert.equal(plot.children[0].attrs.title,plot.children[0].attrs['aria-label']);
-plot.children[0].attrs.click();
+assert.equal(plot.children.length,3);
+assert.equal(plot.children[0].tag,'svg');
+assert.equal(plot.children[1].tag,'button');
+assert(!source.includes('ns-trend-bars'));
+assert(!source.includes('polyline'));
+const paths=plot.children[0].children;
+assert.equal(paths.length,2);
+assert(paths.every(path=>path.tag==='path' && path.attrs.d.includes(' C ')));
+assert.equal(plot.children[1].attrs.title,plot.children[1].attrs['aria-label']);
+plot.children[1].attrs.click();
 assert(chart.children[1].children.includes('100 B'));
+// Smooth cubics stay inside each adjacent pair's measured range.
+const smooth=helpers.timeline([0,100,20,50,50,0].map((value,index)=>({bucket:index*60,download:value,upload:value/2})),60);
+const curves=smooth.children[0].children[1].children[0].children[0];
+for (const path of curves.children) {
+ const values=path.attrs.d.match(/-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi).map(Number);
+ let [x,y]=values;
+ for (let i=2;i<values.length;i+=6) {
+  const [x1,y1,x2,y2,endX,endY]=values.slice(i,i+6);
+  assert(x<=x1 && x1<=x2 && x2<=endX);
+  assert(y1>=Math.min(y,endY)-1e-8 && y1<=Math.max(y,endY)+1e-8);
+  assert(y2>=Math.min(y,endY)-1e-8 && y2<=Math.max(y,endY)+1e-8);
+  [x,y]=[endX,endY];
+ }
+}
+const gaps=helpers.timeline([0,1,2,3,4,7].map((value,index)=>({bucket:value*60,download:50,upload:25,covered:index!==2})),60);
+const gapShapes=gaps.children[0].children[1].children[0].children[0].children;
+assert.equal(gapShapes.filter(shape=>shape.tag==='path').length,4);
+assert.equal(gapShapes.filter(shape=>shape.tag==='circle').length,2);
 assert(!source.includes('设备总流量'));
 assert(!source.includes('连接小时记录'));
 assert(!source.includes('含路由器自身'));
@@ -34,24 +55,21 @@ assert(source.includes("E('section', { 'class': 'ns-section ns-storage-settings'
 assert(!source.includes("E('summary', {}, '存储设置')"));
 assert(source.includes('white-space:nowrap!important; word-break:keep-all!important;'));
 const single=helpers.timeline([{bucket:1700000000,download:0,upload:0}],3600);
-assert.deepEqual(single.children[0].children[1].children[0].children[0].children[0].children.map(bar=>bar.attrs.style),
- ['height:0%','height:0%']);
-// Dense minute windows retain real zero buckets and each direction; no hourly
-// interpolation or fabricated nonzero minimum height is introduced by the view.
+assert(single.children[0].children[1].children[0].children[0].children.every(point=>point.tag==='circle' && point.attrs.cy===187));
+// Minute samples remain exact, selectable and horizontally scrollable.
 const start = Math.floor(1700000000 / 60) * 60;
 const minuteRows=Array.from({length:60},(_,index)=>({bucket:start+index*60,download:index===15?100:0,upload:index===45?50:0}));
 const minuteSelection={bucket:start+15*60};
 const minuteChart=helpers.timeline(minuteRows,60,minuteSelection), minutePlot=minuteChart.children[0].children[1].children[0];
-assert.equal(minutePlot.children.length,60);
+assert.equal(minutePlot.children.length,61);
 assert.equal(minutePlot.attrs.style,'min-width:720px');
-assert.equal(minutePlot.children[15].children[0].children[0].attrs.style,'height:100%');
-assert.equal(minutePlot.children[45].children[0].children[1].attrs.style,'height:50%');
-assert.equal(minutePlot.children[14].children[0].children[0].attrs.style,'height:0%');
-const minuteLabels=minutePlot.children.map(column=>column.children[1].children).filter(Boolean);
+assert(minutePlot.children[16].attrs.title.includes('100 B'));
+assert(minutePlot.children[46].attrs.title.includes('50 B'));
+const minuteLabels=minutePlot.children.slice(1).map(column=>column.children[1].children).filter(Boolean);
 assert(minuteLabels.length>=6 && minuteLabels.length<=12);
 const firstTime=new Date(start*1000);
 assert(minuteLabels[0].endsWith(String(firstTime.getHours()).padStart(2,'0')+':'+String(firstTime.getMinutes()).padStart(2,'0')));
-minutePlot.children[45].attrs.click();
+minutePlot.children[46].attrs.click();
 assert.equal(minuteSelection.bucket,start+45*60);
 assert(minuteChart.children[1].children.includes('50 B'));
 const denseUi=setup({...base(),timeline:minuteRows,timeline_resolution_seconds:60});
@@ -71,7 +89,8 @@ assert(coverageColumns[0].attrs['aria-label'].includes('No observation'));
 assert(!coverageColumns[0].attrs['aria-label'].includes('0 B'));
 assert(coverageColumns[1].attrs['aria-label'].includes('Download 0 B'));
 assert(coverageColumns[2].attrs['aria-label'].includes('Partial observation'));
-assert.equal(coverageColumns[2].querySelector('.ns-trend-up').attrs.style,'height:25%');
+assert(coverageUi.root.querySelectorAll('path').every(path=>path.attrs['stroke-dasharray']==='4 4'));
+assert(coverageColumns[2].attrs['aria-label'].includes('Upload 25 B'));
 assert(text(coverageUi.root.querySelector('.ns-trend-scope')).includes('Totals and rankings use the time range selected above'));
 assert(text(coverageUi.root.querySelector('.ns-minute-coverage')).includes('unknown traffic, not zero'));
 coverageColumns[0].attrs.click();
@@ -132,7 +151,7 @@ const view = new Function('view','rpc','dom','poll','L','E','_',source)(
  control=controlled.root.querySelector('#ns-trend-window');control.value='recent';
  await control.attrs.change({target:control});
  assert.equal(chartQueries.at(-1)[10],'recent');
- assert(text(controlled.root.querySelector('.ns-trend-fallback')).includes('filters use hourly bars'));
+ assert(text(controlled.root.querySelector('.ns-trend-fallback')).includes('filters use hourly curves'));
  assert.equal(controlled.root.querySelector('.ns-trend-scope'),null);
  assert(!source.includes('最多7天'));
  assert(!source.includes('展开查看设备与网站'));

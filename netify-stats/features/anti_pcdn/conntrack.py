@@ -1,4 +1,4 @@
-"""Bounded, exact netlink identity queries; never dump or alter conntrack.
+"""Bounded read-only netlink counters and exact connection identity queries.
 
 Failure to prove identity is an action veto. No shell utilities or third party
 Python modules are needed on OpenWrt.
@@ -8,6 +8,7 @@ import ipaddress
 import secrets
 import socket
 import struct
+import time
 
 
 class IdentityError(ValueError):
@@ -16,6 +17,12 @@ class IdentityError(ValueError):
 
 class TupleMismatch(IdentityError):
     pass
+
+
+class SnapshotError(IdentityError):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
 
 
 def attribute(kind, value):
@@ -119,6 +126,8 @@ def decode_conntrack(payload, expected):
     fields = attributes(payload[4:])
     if fields.get(18, b"\0\0") != b"\0\0":
         raise IdentityError("non-default conntrack zone")
+    if integer(fields.get(8, b'\0' * 4), 4):
+        raise IdentityError('marked connection requires protected path attribution')
     original = decode_tuple(fields.get(1, b""), version)
     reply = decode_tuple(fields.get(2, b""), version)
     if original != expected:
@@ -182,3 +191,110 @@ def neighbour(ip, interface):
     family = socket.AF_INET if address.version == 4 else socket.AF_INET6
     payload = struct.pack("=BBHiHBB", family, 0, 0, ifindex, 0, 0, 0) + attribute(1, address.packed)
     return decode_neighbour(query(0, 30, payload, 28), address, ifindex)
+
+
+def counter_record(payload):
+    """Decode counters, preserving the kernel ID across tuple incarnations.
+
+    Unsupported protocols/zones, untracked entries and missing accounting are
+    omitted. Marked/offloaded identities revoke earlier evidence.
+    """
+    if len(payload) < 4 or payload[1] != 0:
+        raise IdentityError('invalid counter record')
+    version = {socket.AF_INET: 4, socket.AF_INET6: 6}.get(payload[0])
+    if version is None:
+        return None
+    fields = attributes(payload[4:])
+    if fields.get(18, b'\0\0') != b'\0\0':
+        return None
+    proto = attributes(attributes(fields.get(1, b'')).get(2, b'')).get(1)
+    if proto not in (b'\x06', b'\x11'):
+        return None
+    status = integer(fields.get(3), 4)
+    if not status & 8 or status & ((1 << 9) | (1 << 12)):
+        return None
+    if 9 not in fields or 10 not in fields:
+        return None
+    identifier = integer(fields.get(12), 4)
+    if not identifier:
+        return None
+    original, reply = (decode_tuple(fields.get(key, b''), version) for key in (1, 2))
+    # REDIRECT/DNAT and marked transports need different path attribution.
+    # Neither is eligible for the independent fast path.
+    if original[1] != reply[1] or original[4:6] != reply[2:4]:
+        return None
+    excluded = bool(status & ((1 << 14) | (1 << 15))
+                    or fields.get(8, b'\0' * 4) != b'\0' * 4)
+    counters = [attributes(fields[key]) for key in (9, 10)]
+    up, down = (integer(value.get(2), 8) for value in counters)
+    # Preserve unsafe identities as revocations: a newly marked/offloaded
+    # connection must lose its earlier contribution, not just disappear.
+    return dict(id=identifier, tuple=original, reply=reply, upload=up, download=down,
+                excluded=excluded)
+
+
+def counter_snapshot(sock_factory=socket.socket, clock=time.monotonic):
+    """Bounded CT_GET dump; incomplete/interrupted dumps are rejected.
+
+    This is a separate byte ledger, not input to Netify/database accounting.
+    Entries can change during enumeration; a dump is not a frozen network view.
+    No netlink subscriptions, mutations, shell commands or sysctl changes.
+    """
+    sequence = secrets.randbits(32) or 1
+    payload = bytes([socket.AF_UNSPEC, 0, 0, 0])
+    request = struct.pack('=IHHII', 20, 0x101, 0x301, sequence, 0) + payload
+    records, seen, bodies = [], set(), []
+    total = count = 0
+    started = clock()
+    deadline = started + 0.15
+    complete = False
+    with sock_factory(socket.AF_NETLINK, socket.SOCK_RAW, 12) as sock:
+        sock.settimeout(0.15)
+        sock.bind((0, 0))
+        sock.sendto(request, (0, 0))
+        while not complete:
+            remaining = deadline - clock()
+            if remaining <= 0:
+                raise SnapshotError('read_timeout', 'counter snapshot read timed out')
+            sock.settimeout(remaining)
+            packet, _ancillary, flags, sender = sock.recvmsg(65536)
+            if not sender or sender[0] != 0 or flags & socket.MSG_TRUNC or not packet:
+                raise IdentityError('untrusted or truncated counter snapshot')
+            total += len(packet)
+            if total > 4 * 1024 * 1024:
+                raise IdentityError('counter snapshot byte limit')
+            while packet:
+                if len(packet) < 16:
+                    raise IdentityError('short counter snapshot header')
+                size, kind, message_flags, seq, _pid = struct.unpack_from('=IHHII', packet)
+                padded = (size + 3) & ~3
+                if size < 16 or padded > len(packet) or seq != sequence or message_flags & 0x10:
+                    raise IdentityError('interrupted or invalid counter snapshot')
+                body, packet = packet[16:size], packet[padded:]
+                if kind == 3:  # NLMSG_DONE may carry a dump error.
+                    if packet or body not in (b'', b'\0' * 4):
+                        raise IdentityError('counter snapshot completion error')
+                    complete = True
+                    break
+                if kind != 0x100 or not message_flags & 2:
+                    raise IdentityError('unexpected counter snapshot response')
+                count += 1
+                if count > 8192:
+                    raise IdentityError('counter snapshot entry limit')
+                bodies.append(body)
+    # Receive the complete dump before decoding. Python parsing time must not
+    # consume the socket's 150 ms receive budget as the connection table grows.
+    # Both phases together still have a hard, bounded processing budget.
+    for body in bodies:
+        if clock() - started > 0.6:
+            raise SnapshotError('decode_timeout', 'counter snapshot decode timed out')
+        record = counter_record(body)
+        if clock() - started > 0.6:
+            raise SnapshotError('decode_timeout', 'counter snapshot decode timed out')
+        if record is not None:
+            key = (record['id'], record['tuple'])
+            if key in seen:
+                raise IdentityError('duplicate counter identity')
+            seen.add(key)
+            records.append(record)
+    return records

@@ -83,6 +83,40 @@ const releaseButton=ui=>ui.view.leasesPanel.querySelector('button');
  assert(text(observed.view.diagnosticsPanel).includes('Connection identities'));
  assert(text(observed.view.diagnosticsPanel).includes('2048'));
  assert.deepEqual(observed.calls,[]);
+ // Historic shadow outcomes are labelled separately from installed rules.
+ const historyData=base();
+ historyData.settings.enabled=true;
+ historyData.runtime.observations={written:3,recent:[
+  {timestamp:1000,outcome:'would_block',score:80,threshold:80,guards:[],metrics:{upload:8000000,peers:20}},
+  {timestamp:1001,outcome:'evidence_incomplete',score:80,threshold:80,guards:['incomplete_window']},
+  {timestamp:1002,outcome:'below_threshold',score:40,threshold:80,sample_type:'fanout_watch',guards:['not_uploading'],host:'<script>bad</script>'}
+ ]};
+ historyData.runtime.fast_path={matched:12,unattributed:4,error:''};
+ historyData.runtime.observations.recent[0].evidence_source='conntrack_fast';
+ historyData.runtime.observations.recent[0].observed_seconds=3;
+ historyData.runtime.observations.recent[0].connection_upload_bytes=294912;
+ historyData.runtime.execution_readiness={supported:false,reason:'TPROXY fixture',read_only:true};
+ historyData.runtime.observations.pending=4;
+ historyData.runtime.observations.dropped=2;
+ historyData.runtime.observations.recent[0].coverage={execution_readiness:{supported:false}};
+ const history=setup(historyData);
+ assert(text(history.view.observationsPanel).includes('Simulated block; not executed'));
+ assert(text(history.view.observationsPanel).includes('Seconds observed: 3'));
+ assert(text(history.view.observationsPanel).includes('Connection upload at trigger: 288.0 KiB'));
+ assert(text(history.view.statusPanel).includes('does not require waiting 30 minutes'));
+ assert(text(history.view.diagnosticsPanel).includes('Fast counter coverage: 12'));
+ assert(text(history.view.statusPanel).includes('TPROXY fixture'));
+ assert(text(history.view.observationsPanel).includes('Platform precheck failed; this score is not an executable block.'));
+ assert(text(history.view.observationsPanel).includes('Records waiting to be written: 4'));
+ assert(text(history.view.observationsPanel).includes('Records lost to recording limits: 2'));
+
+ assert(text(history.view.observationsPanel).includes('Threshold reached; evidence incomplete'));
+ assert(text(history.view.observationsPanel).includes('Below threshold'));
+ assert(text(history.view.observationsPanel).includes('High peer count; observation only'));
+ assert(text(history.root).includes('Unique peers in 60 seconds'));
+ assert(text(history.root).includes('Protected VPN, proxy and allowlisted connections are excluded'));
+ assert(!walk(history.view.observationsPanel).some(node=>node.tag==='script'||node.attrs.innerHTML));
+ assert.deepEqual(history.calls,[]);
  crossPort.stale=true;
  await observed.view.refresh();
  assert(!text(observed.view.devicesPanel).includes('Complete observation window'));

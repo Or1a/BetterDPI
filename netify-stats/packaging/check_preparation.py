@@ -41,6 +41,11 @@ def python_modules(root, manifest):
 
 def check_imports(trees, packages):
     def require(caller, name):
+        if caller.startswith('anti_pcdn.'):
+            assert not name.startswith('netify_'), caller+' must not depend on traffic accounting or reporting'
+        if caller in ('netify_accounting', 'netify_wan', 'netify_minute', 'netify_storage', 'netify_query', 'netify_rpc'):
+            assert not (name == 'netify_features' or name == 'anti_pcdn' or name.startswith('anti_pcdn.')), \
+                caller+' must not depend on optional detection'
         if name.startswith('netify_') or name == 'anti_pcdn' or name.startswith('anti_pcdn.'):
             assert name in trees, caller+' imports uninstalled module '+name
             parts = name.split('.')

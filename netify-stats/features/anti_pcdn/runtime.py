@@ -14,10 +14,13 @@ import threading
 import time
 
 from .engine import Engine
+from .scoring import REVOKING_GUARDS
 from .firewall import Firewall
+from .observation import ObservationJournal
+from .fast import FastObserver, POLL_SECONDS
 
 QUEUE_LIMIT = 512
-EVALUATE_SECONDS = 10
+EVALUATE_SECONDS = 1
 STATUS_SECONDS = 3
 MAX_LEASES = 128
 MAX_DEVICE_LEASES = 16
@@ -78,12 +81,35 @@ class Worker(threading.Thread):
         self.recovery_keys = ()
         self.recovery_revision = 0
         self.recovery_error = ''
+        self.observations = ObservationJournal(runtime_dir) if settings['mode'] == 'observe' else None
+        self.fast = (FastObserver(settings, runtime_dir=runtime_dir, router_macs=router_macs, clock=clock, wall=wall)
+                     if hasattr(self.engine, 'fast_metadata') else None)
+        self.last_fast = float('-inf')
+        self.execution_readiness = {}
 
     def request_stop(self):
         self.stopping.set()
 
     def gap(self, reason):
         self.generation = (self.generation[0] + 1, reason)
+
+    def reset_evidence(self, now, reason):
+        self.engine.gap(now, reason)
+        if self.fast is not None:
+            self.fast.reset(reason)
+        self.rows = []
+
+    def clear_leases(self, failure_kind):
+        """Every cleanup path must confirm both the operation and empty state."""
+        self.cleanup_ready = False
+        self.last_cleanup_attempt = self.clock()
+        try:
+            if self.firewall.clear() is False or self.firewall.leases:
+                raise RuntimeError(self.firewall.error or 'Feature cleanup could not be confirmed.')
+            self.cleanup_ready = True
+        except Exception as exc:
+            self.event(failure_kind, error=str(exc)[:240])
+        return self.cleanup_ready
 
     def submit(self, message):
         if self.stopping.is_set():
@@ -105,8 +131,9 @@ class Worker(threading.Thread):
     def _sync_gap(self, now):
         generation, reason = self.generation
         if generation != self.applied_generation:
-            self.engine.gap(now, reason)
-            self.rows = []
+            self.reset_evidence(now, reason)
+            if self.firewall.leases:
+                self.clear_leases('gap_cleanup_failed')
             self.applied_generation = generation
 
     def consume(self, item):
@@ -125,6 +152,36 @@ class Worker(threading.Thread):
         # time age accurate even if this item briefly waited in the queue.
         self.engine.observe(message, now, wall + now - arrived)
         self.counters['observed_events'] += 1
+        if self.firewall.leases and hasattr(self.engine, 'protection_update'):
+            update = self.engine.protection_update((message['interface'], message['flow'].get('digest')))
+            if update is not None:
+                self.revoke_protected(now, [update])
+
+    def revoke_protected(self, now, metadata):
+        """Protection overrides an existing lease, not just a new proposal."""
+        protected = [row for row in metadata if REVOKING_GUARDS.intersection(row.get('guards', ()))]
+        if not protected or not self.firewall.leases:
+            return True
+        def identity(row):
+            return tuple(row.get(name) for name in ('interface', 'mac', 'ip', 'peer', 'sport', 'dport', 'proto'))
+        tokens = {row['id'] for row in protected}
+        tuples = {identity(row) for row in protected}
+        for token, lease in list(self.firewall.leases.items()):
+            if token not in tokens and identity(lease) not in tuples:
+                continue
+            try:
+                released = self.firewall.release(token, now)
+                if released is False or token in self.firewall.leases:
+                    raise RuntimeError(self.firewall.error or 'protected lease release failed')
+                self.counters['protected_leases_released'] += 1
+                self.event('protection_released', id=token)
+            except Exception as exc:
+                # An opt-out must never wait for a normal retry/TTL. If precise
+                # removal fails, try removing only this feature's owned table.
+                self.event('protection_release_failed', id=token, error=str(exc)[:240])
+                self.clear_leases('protection_cleanup_failed')
+                return False
+        return True
 
     def seed_metadata(self, message):
         """Accept a requested export baseline without treating it as traffic."""
@@ -177,8 +234,7 @@ class Worker(threading.Thread):
             if token in self.firewall.leases or result is False:
                 raise RuntimeError(self.firewall.error or 'release_failed')
             # Manual release gives every group a fresh observation window.
-            self.engine.gap(now, 'manual_release')
-            self.rows = []
+            self.reset_evidence(now, 'manual_release')
             self.event('released', id=token, request_id=request_id)
         except Exception as exc:
             self.event('release_failed', request_id=str(request.get('request_id', ''))[:64], error=str(exc)[:256])
@@ -192,8 +248,27 @@ class Worker(threading.Thread):
             self.rows = []
             return
         rows = self.engine.candidates(now)
+        metadata = self.engine.fast_metadata(now) if hasattr(self.engine, 'fast_metadata') else []
+        if not self.revoke_protected(now, metadata):
+            self.rows = []
+            return
+        if self.fast is not None:
+            # Prefer the independent fast evidence for a tuple, never add the
+            # two byte ledgers or issue duplicate proposals for one connection.
+            combined = {row['id']: row for row in rows}
+            for row in self.fast.candidates(now, metadata):
+                combined[row['id']] = row
+            rows = sorted(combined.values(), key=lambda row: (
+                not (row['threshold_met'] and not row['guards']), -row['score'], -row['upload'], row['id']))
         self.rows = rows[:50]
-        if self.settings['mode'] != 'auto' or not self.cleanup_ready:
+        if self.settings['mode'] == 'observe':
+            if self.observations is not None:
+                coverage = self.engine.coverage(now) if hasattr(self.engine, 'coverage') else {}
+                coverage['execution_readiness'] = dict(self.execution_readiness)
+                self.observations.record(rows, self.settings, now, self.wall(), coverage)
+            return
+        if (self.settings['mode'] != 'auto' or not self.cleanup_ready
+                or self.execution_readiness.get('supported') is False):
             return
         actions = 0
         suppressed = []
@@ -206,7 +281,7 @@ class Worker(threading.Thread):
         per_device = Counter(lease.get('mac') for lease in self.firewall.leases.values())
         for row in rows:
             if (self.stopping.is_set() or not self.connected or self.generation[0] != generation
-                    or actions >= MAX_ACTIONS or len(self.firewall.leases) >= MAX_LEASES):
+                    or not self.queue.empty() or actions >= MAX_ACTIONS or len(self.firewall.leases) >= MAX_LEASES):
                 break
             if row.get('decision') != 'block' or row.get('guards') or row['id'] in self.firewall.leases:
                 continue
@@ -218,7 +293,8 @@ class Worker(threading.Thread):
                 continue
             actions += 1
             lease = self.firewall.install(row, self.settings['ban_seconds'], action_now)
-            if self.generation[0] != generation or not self.connected or self.stopping.is_set():
+            if (self.generation[0] != generation or not self.connected or self.stopping.is_set()
+                    or not self.queue.empty()):
                 if lease:
                     self.firewall.release(lease['id'], self.clock())
                 break
@@ -243,6 +319,14 @@ class Worker(threading.Thread):
         # Subsequent retries cannot prolong a lease or raise the group score.
         for row, until in suppressed:
             self.engine.suppress(row, until)
+            if self.fast is not None:
+                self.fast.suppress(row, until)
+
+    def check_platform(self, now):
+        if hasattr(self.firewall, 'inspect'):
+            self.execution_readiness = self.firewall.inspect(now)
+            if self.execution_readiness.get('supported') is False and self.firewall.leases:
+                self.clear_leases('capability_cleanup_failed')
 
     def publish(self, now, stopped=False):
         leases = []
@@ -256,8 +340,13 @@ class Worker(threading.Thread):
                      interface=self.settings['interface'], candidates=self.rows[:50], leases=leases,
                      counters=dict(self.counters), engine_counters=dict(self.engine.counters),
                      error=self.error, executor_error=self.firewall.error,
+                     execution_readiness=dict(self.execution_readiness),
                      metadata_error=self.recovery_error,
                      events=list(self.events), queue_depth=self.queue.qsize())
+        if self.observations is not None:
+            state['observations'] = self.observations.status()
+        if self.fast is not None:
+            state['fast_path'] = self.fast.status(now)
         if hasattr(self.engine, 'coverage'):
             state['coverage'] = self.engine.coverage(now)
             state['devices'] = self.engine.device_rows if self.connected and not stopped else []
@@ -266,6 +355,8 @@ class Worker(threading.Thread):
         payload = json.dumps(state, separators=(',', ':'), allow_nan=False).encode('utf-8')
         if len(payload) > 256 * 1024:
             state.update(candidates=[], events=[], error='status_size_limit')
+            if 'observations' in state:
+                state['observations']['recent'] = []
             payload = json.dumps(state, separators=(',', ':'), allow_nan=False).encode('utf-8')
         os.makedirs(self.runtime_dir, mode=0o700, exist_ok=True)
         descriptor, temporary = tempfile.mkstemp(prefix='.status-', dir=self.runtime_dir)
@@ -281,8 +372,7 @@ class Worker(threading.Thread):
     def run(self):
         try:
             # Clean only the feature-owned table after restart, before scoring.
-            self.cleanup_ready = self.firewall.clear() is not False
-            self.last_cleanup_attempt = self.clock()
+            self.clear_leases('startup_cleanup_failed')
             while not self.stopping.is_set():
                 try:
                     self.consume(self.queue.get(timeout=0.2))
@@ -292,17 +382,24 @@ class Worker(threading.Thread):
                 self._sync_gap(now)
                 if now - self.last_status >= STATUS_SECONDS:
                     if not self.cleanup_ready and now - self.last_cleanup_attempt >= 30:
-                        self.cleanup_ready = self.firewall.clear() is not False
-                        self.last_cleanup_attempt = self.clock()
-                        self.engine.gap(self.clock(), 'startup_cleanup')
+                        self.clear_leases('startup_cleanup_failed')
+                        self.reset_evidence(self.clock(), 'startup_cleanup')
                     self.release_requests(now)
                     self.firewall.expire(now)
+                    self.check_platform(now)
                     self.publish(now)
                     self.last_status = now
                 now = self.clock()
                 if now - self.last_evaluation >= EVALUATE_SECONDS:
                     # Do not act while old events are waiting to be evaluated.
                     if self.queue.empty():
+                        if self.fast is not None and self.connected and now - self.last_fast >= POLL_SECONDS:
+                            self.fast.poll(self.engine.fast_metadata(now), now)
+                            self.last_fast = now
+                        # Kernel reads are bounded but can receive new events.
+                        # Apply their protection changes before considering an action.
+                        if not self.queue.empty():
+                            continue
                         self.evaluate(now)
                         self.last_evaluation = now
         except Exception as exc:
@@ -310,10 +407,10 @@ class Worker(threading.Thread):
         finally:
             self.stopping.set()
             self.rows = []
-            try:
-                self.firewall.clear()
-            except Exception as exc:
-                self.error = str(exc)[:512]
+            if self.fast is not None:
+                self.fast.checkpoint(self.clock(), force=True)
+            if not self.clear_leases('shutdown_cleanup_failed'):
+                self.error = self.error or self.firewall.error or 'Feature cleanup could not be confirmed.'
             try:
                 self.publish(self.clock(), stopped=True)
             except Exception:

@@ -71,6 +71,18 @@ class InterfaceTests(unittest.TestCase):
 
 
 class TunnelTests(unittest.TestCase):
+    def setUp(self):
+        # These fixtures simulate Linux netlink/sysfs; do not read the host's
+        # boot identity or depend on its socket constants (e.g. on macOS).
+        original_read = Path.read_text
+        def read(path, *args, **kwargs):
+            return 'boot-test' if str(path) == '/proc/sys/kernel/random/boot_id' else original_read(path, *args, **kwargs)
+        for patcher in (patch.object(Path, 'read_text', read),
+                        patch.object(accounting.socket, 'AF_NETLINK', 16, create=True),
+                        patch.object(accounting.socket, 'NETLINK_ROUTE', 0, create=True)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def test_kernel_kind_not_interface_name_controls_discovery(self):
         import struct
         def attr(kind, value):

@@ -1207,8 +1207,8 @@ msgstr "所选时间范围"
 msgid "Chart window: %s to %s. Totals and rankings use the time range selected above."
 msgstr "图表时间范围：%s 至 %s。总量和排行榜使用上方选择的时间范围。"
 
-msgid "Application and traffic filters use hourly bars for the selected time range."
-msgstr "应用和流量筛选使用所选时间范围的小时柱状图。"
+msgid "Application and traffic filters use hourly curves for the selected time range."
+msgstr "应用和流量筛选使用所选时间范围的小时曲线图。"
 
 msgid "No minute history yet. New observations will appear here; earlier minutes cannot be reconstructed."
 msgstr "暂无分钟历史数据。新的采集数据会显示在此，无法还原此前的分钟记录。"
@@ -1329,3 +1329,153 @@ msgstr "待恢复连接元数据："
 
 msgid "Window wait:"
 msgstr "窗口等待："
+
+msgid "Shadow decision history"
+msgstr "模拟封禁记录"
+
+msgid "Observation records never install rules. Protected VPN, proxy and allowlisted connections are excluded."
+msgstr "观察记录不会安装封禁规则。受保护的 VPN、代理及白名单连接不参与模拟封禁。"
+
+msgid "A simulated block is a scoring proposal; firewall enforcement has not been checked. Other records show why a connection was not eligible."
+msgstr "模拟封禁表示评分条件已满足，尚未检查防火墙执行能力；其他记录说明连接未达到条件的原因。"
+
+msgid "Observation recording failed:"
+msgstr "观察记录写入失败："
+
+msgid "Records written in this session:"
+msgstr "本次运行已写入记录："
+
+msgid "Local rotating history, up to 8 MiB. Collector restarts keep the files; router reboots clear them. The latest 20 records from this session are shown."
+msgstr "日志仅保存在路由器本地，滚动保留最多 8 MiB；重启采集器不清除文件，重启路由器会清除。此处显示本次运行最近 20 条记录。"
+
+msgid "Recorded at"
+msgstr "记录时间"
+
+msgid "Shadow decision"
+msgstr "模拟决策"
+
+msgid "Simulated block; not executed"
+msgstr "拟封禁；未执行"
+
+msgid "Threshold reached; evidence incomplete"
+msgstr "达到阈值；证据不完整"
+
+msgid "Decision unavailable"
+msgstr "决策不可用"
+
+msgid "Completed connection replay guards"
+msgstr "已结束连接去重游标"
+
+msgid "Zero-byte reports ignored"
+msgstr "已忽略的零字节报告"
+
+msgid "Reports outside the observation window"
+msgstr "观察窗口以外的报告"
+
+msgid "Repeated unresolved reports"
+msgstr "重复的未归属报告"
+
+msgid "Completed identities compacted"
+msgstr "已压缩的结束连接身份"
+
+msgid "Completed excluded identities released"
+msgstr "已释放的排除连接身份"
+
+msgid "Completed replay guard limit"
+msgstr "结束连接去重游标上限"
+
+msgid "Completed connection counter conflicts"
+msgstr "已结束连接计数冲突"
+
+msgid "Repeated completed metadata"
+msgstr "重复的结束连接元数据"
+
+msgid "Previous connection evidence retained"
+msgstr "已保留的旧连接证据"
+
+msgid "Unique peers in 60 seconds: 20 can add up to 25 points, 40 up to 35, and 80 up to 40. This weight caps the contribution."
+msgstr "最近 60 秒的不同对端：20 个最多加 25 分，40 个最多加 35 分，80 个最多加 40 分；实际加分不超过此权重。"
+
+msgid "Groups with at least 40 peers are also recorded without material upload. These watch-only samples cannot qualify for a simulated block."
+msgstr "至少有 40 个对端的连接组，即使没有实质上传也会记录。这类纯观察样本不会成为模拟封禁提议。"
+
+msgid "High peer count; observation only"
+msgstr "对端数量多；仅作观察"
+
+msgid "Multiple upload-dominant peers"
+msgstr "多个以上传为主的对端"
+
+msgid "Repeated upload progress"
+msgstr "连续上传进展"
+
+msgid "Fast distribution detection checks new connection bytes every second. It can qualify after 2 MiB across at least 8 upload-dominant peers, without waiting for a full window."
+msgstr "快速分发检测每秒检查连接新增字节：至少 8 个以上传为主的对端、合计达到 2 MiB 后即可满足流量条件，无需等待完整窗口。"
+
+msgid "Fast detection unavailable:"
+msgstr "快速检测不可用："
+
+msgid "Fast distribution evidence"
+msgstr "快速分发证据"
+
+msgid "Seconds observed:"
+msgstr "已观察秒数："
+
+msgid "Connection upload at trigger:"
+msgstr "触发时连接已上传："
+
+msgid "Fast counter coverage:"
+msgstr "快速计数覆盖连接数："
+
+msgid "Connections without matching DPI identity:"
+msgstr "未匹配 DPI 身份的连接："
+
+msgid "Upload distribution across rotating peers"
+msgstr "轮换对端的上传分发"
+
+msgid "Repeated cross-port distribution"
+msgstr "持续跨端口分发"
+
+msgid "Fast detection combines ports and checks new bytes every second. Bursts need 8 uploading peers; rotating uploads need 4 peers across 3 networks and 2 MiB of distributed evidence. A 30-minute lookback does not require waiting 30 minutes."
+msgstr "快速识别每秒检查新增流量，并跨端口汇总。突发分发需 8 个上传对端；轮换分发需覆盖 3 个网段的 4 个对端及 2 MiB 分发证据。回看 30 分钟不代表必须等待 30 分钟。"
+
+msgid "History alone cannot trigger a decision: new peers need 512 KiB of current upload, returning qualified peers need 32 KiB, with repeated upload progress. VPN and allowlist protections take priority."
+msgstr "历史记录不能单独触发判定：新对端还需本次上传 512 KiB，已满足条件的回访对端需 32 KiB，并持续产生上传。VPN 和放行名单始终优先。"
+
+msgid "Distribution history unavailable:"
+msgstr "分发历史不可用："
+
+msgid "Cross-port uploading peers:"
+msgstr "跨端口上传对端："
+
+msgid "Distributed upload evidence:"
+msgstr "分发上传证据："
+
+msgid "Cross-port history:"
+msgstr "跨端口历史："
+
+msgid "Qualified distribution groups:"
+msgstr "达到分发条件的分组："
+
+msgid "Counter sample time:"
+msgstr "计数采样耗时："
+
+msgid "Failed reads:"
+msgstr "读取失败："
+
+msgid "Recovered reads:"
+msgstr "恢复读取："
+
+msgid "This forwarding path cannot currently enforce automatic blocks. Scoring and observation continue."
+msgstr "当前转发路径暂不支持自动封禁，评分和观察继续运行。"
+
+msgid "Fast peer diversity counts IPv4 addresses and IPv6 /64 prefixes; multiple addresses do not prove multiple machines."
+msgstr "快速识别按 IPv4 地址和 IPv6 /64 前缀计算对端多样性；多个地址不代表多台机器。"
+
+msgid "Records waiting to be written:"
+msgstr "等待写入的记录："
+
+msgid "Records lost to recording limits:"
+msgstr "因记录限制而丢失："
+
+msgid "Platform precheck failed; this score is not an executable block."
+msgstr "平台预检未通过；此次评分不代表可以执行封禁。"

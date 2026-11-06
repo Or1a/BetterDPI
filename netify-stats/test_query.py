@@ -44,6 +44,35 @@ def make_version_two(db):
 
 
 class QueryTest(unittest.TestCase):
+    def test_expanded_vpn_details_do_not_exceed_sqlite_parameter_limit(self):
+        for migrate in (None, make_version_two, compact_schema):
+            with self.subTest(schema=migrate), sqlite3.connect(':memory:') as db:
+                db.execute('''CREATE TABLE hourly (bucket INTEGER,mac TEXT,ip TEXT,
+                    application TEXT,protocol TEXT,host TEXT,upload INTEGER,download INTEGER,flows INTEGER)''')
+                db.executemany('INSERT INTO hourly VALUES (?,?,?,?,?,?,?,?,?)',
+                    [(3600, 'mac', '192.0.2.2', 'native.%d' % index, 'WireGuard', '', 10, 20, 1)
+                     for index in range(1200)])
+                if migrate:
+                    migrate(db)
+                db.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 999)
+                result = aggregate(db, 0, '', 7200, Classifier(RULES), {}, {},
+                                   1, 1, 'total', 'desc', ['protocol:vpn'])
+                app = result['applications'][0]
+                self.assertEqual(app['id'], 'protocol:vpn')
+                self.assertEqual(app['devices'][0]['upload'], 12000)
+                self.assertEqual(app['devices'][0]['download'], app['download'])
+
+    def test_legacy_nullable_native_labels_remain_in_expanded_devices(self):
+        with sqlite3.connect(':memory:') as db:
+            db.execute('''CREATE TABLE hourly (bucket INTEGER,mac TEXT,ip TEXT,
+                application TEXT,protocol TEXT,host TEXT,upload INTEGER,download INTEGER,flows INTEGER)''')
+            db.executemany('INSERT INTO hourly VALUES (?,?,?,?,?,?,?,?,?)',
+                [(3600, 'mac', '192.0.2.2', native, 'UDP', None, 10, 20, 1)
+                 for native in (None, 'Unknown')])
+            result = aggregate(db, 0, '', 7200, Classifier(RULES), {}, {},
+                               1, 1, 'total', 'desc', ['protocol:udp'])
+            self.assertEqual(result['applications'][0]['devices'][0]['upload'], 20)
+
     def create_history(self, path):
         db = sqlite3.connect(path)
         db.execute('''CREATE TABLE hourly (

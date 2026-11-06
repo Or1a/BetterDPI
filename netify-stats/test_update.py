@@ -18,6 +18,10 @@ import netify_update as update
 PAYLOAD = b'a verified release package'
 
 
+def fixture_identity(pid):
+    return 'fixture-start' if pid == os.getpid() else None
+
+
 def manifest(version='0.3.0', series='24.10'):
     fmt = 'ipk' if series == '24.10' else 'apk'
     return {'schema': 1, 'version': version, 'tag': 'V' + version, 'packages': {
@@ -110,7 +114,8 @@ class UpdateTests(unittest.TestCase):
             self.assertEqual(update.start_install('0.2.8', '0.3.0')['error'], 'update_not_checked')
         spawn.assert_not_called()
 
-    def test_live_orphan_installer_blocks_new_check_and_toggle(self):
+    @patch.object(update, '_identity', side_effect=fixture_identity)
+    def test_live_orphan_installer_blocks_new_check_and_toggle(self, _identity):
         self.state('installing', installer_pid=os.getpid(), installer_start=update._identity(os.getpid()))
         self.assertTrue(update.read_status('0.2.8')['busy'])
         self.assertTrue(update.installation_active())
@@ -119,7 +124,8 @@ class UpdateTests(unittest.TestCase):
         spawn.assert_not_called()
         self.assertEqual(update._read_state()['state'], 'installing')
 
-    def test_pid_reuse_does_not_preserve_busy(self):
+    @patch.object(update, '_identity', side_effect=fixture_identity)
+    def test_pid_reuse_does_not_preserve_busy(self, _identity):
         self.state('installing', installer_pid=os.getpid(), installer_start='wrong-start-time')
         self.assertFalse(update.installation_active())
         self.assertEqual(update.read_status('0.2.8')['state'], 'interrupted')
@@ -145,7 +151,8 @@ class UpdateTests(unittest.TestCase):
             self.assertEqual(update.start_check('0.2.8')['error'], 'worker_start_failed')
         self.assertEqual(update.read_status('0.2.8')['error'], 'worker_start_failed')
 
-    def test_manual_action_cleans_only_orphan_download_directories(self):
+    @patch.object(update, '_identity', side_effect=fixture_identity)
+    def test_manual_action_cleans_only_orphan_download_directories(self, _identity):
         orphan = Path(update.STATE_DIR) / 'download-orphan'
         orphan.mkdir()
         (orphan / 'package.ipk').write_bytes(PAYLOAD)
@@ -235,6 +242,7 @@ class UpdateTests(unittest.TestCase):
         run.assert_not_called()
         self.assertEqual(state['state'], 'up_to_date')
 
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'Requires real Linux /proc and fork/exec')
     def test_launcher_records_pid_closes_job_fd_and_runs_fixed_argv(self):
         # Actual fork/exec with a harmless Python executable records argv and
         # verifies neither lifecycle lock reaches package scripts.
@@ -271,6 +279,7 @@ class UpdateTests(unittest.TestCase):
             os.close(fd)
         self.assertFalse(marker.exists())
 
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'Requires real Linux /proc and fork/exec')
     def test_killed_worker_cannot_interrupt_or_duplicate_orphan_installer(self):
         # Pause the forked launcher before publishing its PID. Killing the
         # worker there must leave a continuous lock-to-PID handoff, and the

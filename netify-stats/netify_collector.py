@@ -723,36 +723,22 @@ class Collector:
         raise ConnectionError("Netifyd socket closed")
 
     def read_message(self, line):
+        features = getattr(self, 'features', None)
         try:
             message = json.loads(line)
-        except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
-            if getattr(self, 'minutes', None):
-                self.minutes.note_gap(time.time(), 'invalid_messages')
-            return
-        if not isinstance(message, dict) or set(message.keys()) == {"length"}:
-            return
-        flow = message.get('flow')
-        if message.get('type') in ('flow', 'flow_stats', 'flow_purge'):
-            if not isinstance(message.get('interface', ''), str):
-                self.invalid_messages += 1
-                if getattr(self, 'minutes', None):
-                    self.minutes.note_gap(time.time(), 'invalid_messages')
+            if not isinstance(message, dict) or set(message.keys()) == {"length"}:
                 return
-            if not isinstance(flow, dict) or not isinstance(flow.get('digest'), str):
-                self.invalid_messages += 1
-                if getattr(self, 'minutes', None):
-                    self.minutes.note_gap(time.time(), 'invalid_messages')
-                return
-            if any(flow.get(key) is not None and not isinstance(flow[key], str)
-                   for key in ('local_mac', 'other_mac', 'local_ip', 'detected_application_name', 'detected_protocol_name', 'host_server_name', 'dns_host_name', 'other_ip')):
-                self.invalid_messages += 1
-                if getattr(self, 'minutes', None):
-                    self.minutes.note_gap(time.time(), 'invalid_messages')
-                return
-        try:
+            if message.get('type') in ('flow', 'flow_stats', 'flow_purge'):
+                flow = message.get('flow')
+                if (not isinstance(message.get('interface', ''), str) or not isinstance(flow, dict)
+                        or not isinstance(flow.get('digest'), str)):
+                    raise ValueError('Invalid flow identity')
+                if any(flow.get(key) is not None and not isinstance(flow[key], str)
+                       for key in ('local_mac', 'other_mac', 'local_ip', 'detected_application_name',
+                                   'detected_protocol_name', 'host_server_name', 'dns_host_name', 'other_ip')):
+                    raise ValueError('Invalid flow metadata')
             # Forward once, before accounting transformations. Recovered file
             # snapshots and replayed pending stats never enter this subscriber.
-            features = getattr(self, 'features', None)
             if features and features.active:
                 features.submit(message)
             self.handle(message)
@@ -760,6 +746,8 @@ class Collector:
             self.invalid_messages += 1
             if getattr(self, 'minutes', None):
                 self.minutes.note_gap(time.time(), 'invalid_messages')
+            if features:
+                features.gap('invalid_message')
 
     def run(self):
         try:

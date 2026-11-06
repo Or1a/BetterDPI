@@ -1,5 +1,6 @@
 """Packaging source checks only: never invokes a builder or lifecycle hook."""
 import importlib.util
+import ast
 import json
 from pathlib import Path
 import shutil
@@ -13,6 +14,16 @@ spec.loader.exec_module(preparation)
 
 
 class PreparationTest(unittest.TestCase):
+    def test_accounting_and_optional_detection_have_no_back_dependencies(self):
+        for caller, dependency, error in (
+                ('anti_pcdn.engine', 'netify_storage', 'traffic accounting'),
+                ('netify_query', 'anti_pcdn.engine', 'optional detection'),
+                ('netify_storage', 'netify_features', 'optional detection')):
+            with self.subTest(caller=caller, dependency=dependency):
+                trees = {caller: ast.parse('import '+dependency), dependency: ast.parse('')}
+                with self.assertRaisesRegex(AssertionError, error):
+                    preparation.check_imports(trees, {'anti_pcdn'})
+
     def package_fixture(self, root):
         files = {
             'features/anti_pcdn/__init__.py': ('', '/usr/lib/netify-stats/anti_pcdn/__init__.py'),

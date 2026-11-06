@@ -59,6 +59,21 @@ class FakeFirewall:
 
 
 class RuntimeTest(unittest.TestCase):
+    def test_invalid_collector_input_invalidates_feature_coverage_once(self):
+        from netify_collector import Collector
+        collector = Collector.__new__(Collector)
+        collector.invalid_messages, collector.minutes = 0, Mock()
+        collector.handle = Mock()
+        collector.features = FeatureBridge()
+        collector.features.worker, collector.features.active = self.worker, True
+        initial = self.worker.generation[0]
+        for raw in (b'{broken', b'{"type":"flow","interface":[],"flow":{"digest":"x"}}'):
+            collector.read_message(raw)
+        self.assertEqual(collector.invalid_messages, 2)
+        self.assertEqual(self.worker.generation[0], initial + 2)
+        self.assertEqual(collector.minutes.note_gap.call_count, 2)
+        collector.handle.assert_not_called()
+
     def test_requested_export_recovery_does_not_replay_cumulative_traffic(self):
         import netify_collector as collector
         from anti_pcdn.engine import Engine
@@ -232,6 +247,23 @@ class RuntimeTest(unittest.TestCase):
         self.worker.cleanup_ready = False
         self.worker.evaluate(self.now)
         self.assertFalse(self.firewall.calls)
+
+    def test_cleanup_success_requires_empty_lease_state(self):
+        self.engine.rows = [self.row()]
+        self.firewall.leases['old'] = dict(expires=self.now + 120, mac='old')
+        self.firewall.clear = Mock(return_value=True)
+        self.assertFalse(self.worker.clear_leases('cleanup_failed'))
+        self.worker.evaluate(self.now)
+        self.assertFalse(self.firewall.calls)
+
+    def test_status_publication_does_not_run_firewall_maintenance(self):
+        self.firewall.inspect = Mock(return_value={'supported': False})
+        self.firewall.clear = Mock()
+        self.worker.publish(self.now)
+        self.firewall.inspect.assert_not_called()
+        self.firewall.clear.assert_not_called()
+        self.worker.check_platform(self.now)
+        self.assertFalse(self.worker.execution_readiness['supported'])
 
     def test_unverified_kernel_write_does_not_feed_retry_evidence(self):
         self.engine.rows = [self.row()]

@@ -40,8 +40,8 @@ jobs:
           fi
           python3 -m unittest discover -s netify-stats -p 'test_*.py'
           python3 netify-stats/reproduce_late_original.py
-          for test in test_i18n_ui.cjs test_classification_ui.cjs test_diagnostics_ui.cjs test_filter_ui.cjs test_update_ui.cjs test_interface_ui.cjs test_logic.cjs test_settings_ui.cjs test_ui_helpers.cjs test_anti_pcdn_ui.cjs; do
-            node "netify-stats/$test"
+          for test in netify-stats/test_*_ui.cjs netify-stats/test_logic.cjs; do
+            node "$test"
           done
       - name: Download verified OpenWrt SDK
         run: |
@@ -117,26 +117,3 @@ jobs:
           printf '%s\n' "$assets" | grep -Fx 'BetterDPI-openwrt-25.12-all.apk'
           printf '%s\n' "$assets" | grep -Fx 'SHA256SUMS'
           printf '%s\n' "$assets" | grep -Fx 'update.json'
-
-  cleanup_rc:
-    if: github.ref == 'refs/tags/V0.2.8'
-    needs: release
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - name: Remove obsolete 0.2.8 release candidates
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          for candidate in v0.2.8-rc2 v0.2.8-rc4; do
-            if gh release view "$candidate" >/dev/null 2>&1; then
-              gh release delete "$candidate" --yes
-            fi
-          done
-          git push origin --delete \
-            refs/tags/v0.2.8-rc1 refs/tags/v0.2.8-rc2 \
-            refs/tags/v0.2.8-rc3 refs/tags/v0.2.8-rc4 \
-            refs/tags/published-v0.2.8-rc4

@@ -20,6 +20,7 @@ TABLE = "betterdpi_anti_pcdn"
 OWNER = "BetterDPI Anti-PCDN leases v1"
 MAX_LEASES = 256
 CAPABILITY_TTL = 5
+INSPECTION_TTL = 30
 MAX_AGE = 15
 WARNING = "Rule installation is verified; actual software/hardware forwarding paths are not validated."
 
@@ -130,7 +131,7 @@ def lease_script(name, interface, identity, identifier, seconds, lan_direction="
     for direction, interface_key in (("original", "iifname"), ("reply", "oifname")):
         if lan_direction == "reply":
             interface_key = "oifname" if direction == "original" else "iifname"
-        lines.append("add rule inet %s %s meta nfproto ipv%s meta l4proto %s ct direction %s meta %s %s ct original %s saddr %s ct original proto-src %s ct original %s daddr %s ct original proto-dst %s counter drop comment %s" %
+        lines.append("add rule inet %s %s meta nfproto ipv%s meta l4proto %s ct direction %s meta %s %s ct original %s saddr %s ct original proto-src %s ct original %s daddr %s ct original proto-dst %s meta mark 0 ct mark 0 counter drop comment %s" %
                      (TABLE, name, version, "tcp" if proto == 6 else "udp", direction,
                       interface_key, json.dumps(interface), family, src, sport, family, dst, dport,
                       json.dumps(name + ":" + direction)))
@@ -172,6 +173,8 @@ class Firewall:
         self.error, self.warning = "", WARNING
         self.pending_identity = False
         self.checked_at = float("-inf")
+        self.inspected_at = float('-inf')
+        self.inspection = {}
 
     def _json(self, *args):
         try:
@@ -181,6 +184,24 @@ class Firewall:
 
     def _apply(self, script):
         return self.runner([self.nft, "-f", "-"], script)
+
+    def inspect(self, now):
+        """Read-only platform precheck, including in observation mode.
+
+        Success never claims a particular tuple or hardware path can be blocked.
+        This method neither creates the feature table nor probes a connection.
+        """
+        if not 0 <= now - self.inspected_at < INSPECTION_TTL:
+            try:
+                document = self._json('list', 'ruleset')
+                capability(document, self.modules())
+                owned_table(document)
+                self.inspection = dict(supported=True, reason='')
+            except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+                self.inspection = dict(supported=False, reason=str(exc)[:240])
+            self.inspected_at = now
+        return dict(self.inspection, age_seconds=round(max(0, now-self.inspected_at), 1),
+                    read_only=True, connection_checks_complete=False)
 
     def _prepare(self, now):
         if now - self.checked_at < CAPABILITY_TTL:
@@ -246,6 +267,8 @@ class Firewall:
                 raise FirewallError("current neighbour MAC does not match the scored device")
             resolved = self.resolver(row)
             identifier = resolved.get("id")
+            if row.get('evidence_source') == 'conntrack_fast' and identifier != row.get('ct_id'):
+                raise FirewallError('kernel counter identity changed before enforcement')
             lan_direction = resolved.get("lan_direction", "original")
             original = resolved.get("tuple")
             if (type(identifier) is not int or not 1 <= identifier <= 0xffffffff

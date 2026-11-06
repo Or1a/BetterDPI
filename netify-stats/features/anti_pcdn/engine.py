@@ -14,7 +14,8 @@ import re
 import time
 
 from .config import domain_matches, normalize_domain, validate
-from .scoring import KIB, MIB, score
+from .scoring import KIB, MIB, REVOKING_GUARDS, score
+from .history import peer_key
 
 WINDOW = 300
 SHORT_WINDOW = 60
@@ -24,7 +25,11 @@ MAX_INTERVAL = 60
 RETENTION = WINDOW + MAX_INTERVAL
 MAX_FLOWS = 2048
 MAX_GROUPS = 512
-MAX_GROUP_FLOWS = 64
+# Every retained identity already shares MAX_FLOWS/MAX_SAMPLES. A separate
+# 64-identity veto counted old/closed connections and disabled whole groups
+# even when all their observed evidence fit within the global budgets.
+MAX_GROUP_FLOWS = MAX_FLOWS
+MAX_CLOSED_CURSORS = 4096
 MAX_DEVICE_GROUPS = 32
 MAX_SAMPLES = 16384
 MAX_IGNORED = 4096
@@ -75,6 +80,7 @@ class _Flow:
     samples: deque = field(default_factory=deque)
     next_promotion: float = 0
     recovered: bool = False
+    application: str = ''
 
 
 @dataclass
@@ -83,6 +89,17 @@ class _Group:
     since: float
     valid_after: float
     members: set = field(default_factory=set)
+    last_active: float = -math.inf
+
+
+@dataclass
+class _ClosedCursor:
+    birth: int
+    total: object
+    seen: object
+    expires: float
+    identity: tuple
+    group: tuple
 
 
 class Engine:
@@ -97,6 +114,8 @@ class Engine:
         self._router_macs = {mac.lower() for mac in router_macs}
         self.flows = {}
         self.tuples = {}
+        self.closed_cursors = {}
+        self.closed_tuples = {}
         self.groups = {}
         # All identities keep their cursor; only material upload groups obtain
         # a full scoring window. Browser ports do not consume those slots.
@@ -131,9 +150,12 @@ class Engine:
                 flow.valid_after = max(now + WINDOW, flow.suppressed_until + WINDOW)
             self._sample_count = 0
             self.missing.clear()
+            self.closed_cursors.clear()
+            self.closed_tuples.clear()
             for group in self.groups.values():
                 group.since = now
                 group.valid_after = now + WINDOW
+                group.last_active = now
             self.holds = {key: now + max(0, expiry - self._last_now)
                           for key, expiry in self.holds.items()}
             self._last_sweep = now
@@ -162,11 +184,19 @@ class Engine:
 
     def _missing(self, key, raw, now):
         self.counters['missing_metadata'] += 1
+        total, seen = raw.get('total_bytes'), raw.get('last_seen_at')
+        prior = self.missing.get(key)
+        if (prior is not None and _integer(total) and _integer(seen, 1)
+                and prior[2:] == (total, seen) and prior[1] == raw.get('first_seen_at')):
+            self.counters['duplicate_missing_events'] += 1
+            return
         if key in self.missing or len(self.missing) < MAX_RECOVERY:
             if key not in self.missing:
                 self.counters['gaps'] += 1
             birth = raw.get('first_seen_at')
-            self.missing[key] = (now, birth if _integer(birth, 1) else None)
+            self.missing[key] = (now, birth if _integer(birth, 1) else None,
+                                 total if _integer(total) else None,
+                                 seen if _integer(seen, 1) else None)
             self.last_gap, self.last_gap_at, self.last_gap_scope = 'missing_metadata', now, 'unresolved'
         else:
             self.counters['recovery_capacity'] += 1
@@ -201,24 +231,68 @@ class Engine:
         if self.tuples.get(identity) == key:
             del self.tuples[identity]
 
+    def _archive_incarnation(self, flow):
+        # A legitimate new incarnation is not a missing traffic report. Keep
+        # the old, already-observed samples until normal expiry so replacing
+        # its live digest cannot erase download evidence or restart the group.
+        old_key = flow.key
+        history_key = old_key[:2] + (flow.birth,)
+        del self.flows[old_key]
+        flow.key, flow.closed = history_key, True
+        self.flows[history_key] = flow
+        members = self.members[flow.group]
+        members.remove(old_key)
+        members.add(history_key)
+        identity = self._tuple(flow)
+        if self.tuples.get(identity) == old_key:
+            self.tuples[identity] = history_key
+        self.counters['incarnations_retained'] += 1
+
+    def _drop_closed_cursor(self, key):
+        cursor = self.closed_cursors.pop(key)
+        if self.closed_tuples.get(cursor.identity) == key:
+            del self.closed_tuples[cursor.identity]
+
+    def _retire_closed(self, flow):
+        if len(self.closed_cursors) >= MAX_CLOSED_CURSORS:
+            self.counters['closed_cursor_capacity'] += 1
+            return
+        identity = self._tuple(flow)
+        self.closed_cursors[flow.key] = _ClosedCursor(
+            flow.birth, flow.total, flow.seen, flow.touched + RETENTION, identity, flow.group)
+        prior = self.closed_cursors.get(self.closed_tuples.get(identity))
+        if prior is None or prior.birth <= flow.birth:
+            self.closed_tuples[identity] = flow.key
+        self._remove(flow.key)
+        self.counters['closed_identities_compacted'] += 1
+
     def _sweep(self, now):
         self._last_sweep = now
+        for key, cursor in list(self.closed_cursors.items()):
+            if cursor.expires < now:
+                self._drop_closed_cursor(key)
         for key, flow in list(self.flows.items()):
             self._prune_samples(flow, now)
             if now - flow.touched > RETENTION:
                 self._remove(key)
+            elif flow.closed and not flow.samples:
+                # Keep replay protection, but stop a completed empty identity
+                # occupying a live observation slot for another five minutes.
+                self._retire_closed(flow)
         for key, group in list(self.groups.items()):
-            # Retain cursors and short evidence on each flow, but release full
-            # window slots when no active member has material recent uploads.
+            # Keep a full window through brief pauses. Churning the slot after
+            # only a short pause discards the very history being measured.
             active_upload = any(not self.flows[member].closed and
                                 sum(sample[1] for sample in self.flows[member].samples
                                     if sample[0] >= now - SHORT_WINDOW) >= 64 * KIB
                                 for member in group.members)
-            if not active_upload:
+            if active_upload:
+                group.last_active = now
+            if not group.members or now - group.last_active > WINDOW:
                 del self.groups[key]
                 self.counters['groups_reclaimed'] += 1
-        for key, (seen, _birth) in list(self.missing.items()):
-            if seen + WINDOW <= now:
+        for key, request in list(self.missing.items()):
+            if request[0] + WINDOW <= now:
                 del self.missing[key]
         for key, (expiry, _group) in list(self.ignored.items()):
             if expiry < now:
@@ -232,6 +306,7 @@ class Engine:
         if key in self.flows:
             flow = self.flows[key]
             self._invalidate_flow(flow, now, 'attribution_changes')
+            flow.guards.add('identity_changed')
             # Keep its cursor as a tombstone; later metadata of the same birth
             # must not turn previously ignored bytes into a new first report.
             flow.closed = True
@@ -282,16 +357,49 @@ class Engine:
             self.seed(key, raw, now, wall)
         elif kind == 'flow':
             self._metadata(key, raw, now)
+        elif key in self.closed_cursors:
+            cursor = self.closed_cursors[key]
+            if raw.get('first_seen_at', cursor.birth) != cursor.birth:
+                # A new birth without metadata may belong to another group.
+                # Recover its attribution rather than trusting the old cursor.
+                if not self._irrelevant_delta(raw, wall):
+                    self._missing(key, raw, now)
+            elif _integer(raw.get('total_bytes')) and raw['total_bytes'] == cursor.total:
+                self.counters['duplicates'] += 1
+            else:
+                self.counters['closed_cursor_conflicts'] += 1
+                self._group_gap(cursor.group, now, 'closed_cursor_conflicts')
+        elif key not in self.flows and self._irrelevant_delta(raw, wall):
+            if kind == 'flow_purge' and key in self.ignored and self.ignored[key][1] is None:
+                del self.ignored[key]
+                self.counters['excluded_identities_released'] += 1
         elif key in self.ignored:
             _expiry, group = self.ignored[key]
             self.ignored[key] = (now + RETENTION, group)
             if group is not None:
                 self._group_gap(group, now, 'omitted_flow')
             self.counters['ignored_events'] += 1
+            if kind == 'flow_purge' and group is None:
+                del self.ignored[key]
+                self.counters['excluded_identities_released'] += 1
         elif key not in self.flows:
             self._missing(key, raw, now)
         else:
             self._stats(self.flows[key], raw, now, wall, kind == 'flow_purge')
+
+    def _irrelevant_delta(self, raw, wall):
+        up, down, seen = (raw.get(name) for name in ('local_bytes', 'other_bytes', 'last_seen_at'))
+        # Do not resolve an earlier real loss. These messages merely add no
+        # new missing evidence and must not keep extending its quarantine.
+        if not _integer(up) or not _integer(down):
+            return False
+        if up + down == 0:
+            self.counters['zero_delta_events'] += 1
+            return True
+        if _integer(seen, 1) and seen < (wall - RETENTION - BUCKET) * 1000:
+            self.counters['expired_delta_events'] += 1
+            return True
+        return False
 
     def _metadata(self, key, raw, now):
         mac = raw.get('local_mac')
@@ -323,6 +431,17 @@ class Engine:
         self._resolve_missing(key, group_key)
         identity = (mac, str(local), str(remote), raw['local_port'], raw['other_port'], raw['ip_protocol'])
         tuple_key = (key[0],) + identity
+        closed = self.closed_cursors.get(key)
+        if closed is not None:
+            if birth <= closed.birth:
+                self.counters['closed_metadata'] += 1
+                return
+            self._drop_closed_cursor(key)
+        alias_closed = self.closed_cursors.get(self.closed_tuples.get(tuple_key))
+        if alias_closed is not None and birth <= alias_closed.birth:
+            self._ignore(key, now)
+            self.counters['duplicate_identities'] += 1
+            return
         old = self.flows.get(key)
         reused_identity = False
         if old is not None:
@@ -336,8 +455,7 @@ class Engine:
                     return
                 self._enrich(old, raw)
                 return
-            self._group_gap(old.group, now, 'birth_changes')
-            self._remove(key)
+            self._archive_incarnation(old)
             reused_identity = True
             self.counters['birth_changes'] += 1
         alias = self.flows.get(self.tuples.get(tuple_key))
@@ -349,9 +467,6 @@ class Engine:
                 self.counters['duplicate_identities'] += 1
                 return
             alias.closed = True
-            self._sample_count -= len(alias.samples)
-            alias.samples.clear()
-            self._group_gap(alias.group, now, 'birth_changes')
             reused_identity = True
             self.counters['birth_changes'] += 1
         if key in self.ignored:
@@ -374,8 +489,6 @@ class Engine:
         group = self.groups.get(group_key)
         if group is not None:
             group.members = self.members[group_key]
-            if len(group.members) > MAX_GROUP_FLOWS:
-                self._group_gap(group_key, now, 'group_flow_capacity')
 
     def _activate(self, flow, now):
         group = self.groups.get(flow.group)
@@ -388,8 +501,7 @@ class Engine:
             return None
         flow.next_promotion = now + BUCKET
         members = self.members[flow.group]
-        reason = ('group_flow_capacity' if len(members) > MAX_GROUP_FLOWS else
-                  'group_capacity' if len(self.groups) >= MAX_GROUPS else
+        reason = ('group_capacity' if len(self.groups) >= MAX_GROUPS else
                   'device_group_capacity' if sum(key[1] == flow.mac for key in self.groups) >= MAX_DEVICE_GROUPS else '')
         if reason:
             self.counters['capacity_drops'] += 1
@@ -397,7 +509,7 @@ class Engine:
             self._group_gap(flow.group, now, reason)
             return None
         first = min(self.flows[member].created for member in members)
-        group = _Group(flow.group, first, now + WINDOW, members)
+        group = _Group(flow.group, first, now + WINDOW, members, last_active=now)
         self.groups[flow.group] = group
         self.counters['groups_activated'] += 1
         return group
@@ -421,25 +533,31 @@ class Engine:
             self._group_gap(flow.group, now, 'metadata_recovered')
             self.counters['metadata_recovered'] += 1
 
-    def _enrich(self, flow, raw):
+    def _protect(self, flow, raw):
         # DNS association is sufficient to honor an explicit opt-out, never
         # sufficient to add PCDN points or extend a hint to other connections.
         if any(domain_matches(raw.get(name), self.settings['allow_domains'])
                for name in ('host_server_name', 'dns_host_name')):
             flow.allow_hint = True
-        protocol = raw.get('detected_protocol_name')
-        if isinstance(protocol, str) and len(protocol) <= 128:
-            if _protocol_key(flow.protocol) in _GENERIC or _protocol_key(protocol) not in _GENERIC:
-                flow.protocol = protocol
-            if _protocol_key(protocol) in _VPN:
+        for name in ('detected_protocol_name', 'detected_application_name'):
+            value = raw.get(name)
+            if isinstance(value, str) and len(value) <= 128 and _protocol_key(value) in _VPN:
                 flow.guards.add('protected_transport')
-        application = raw.get('detected_application_name')
-        if isinstance(application, str) and _protocol_key(application) in _VPN:
-            flow.guards.add('protected_transport')
         if raw.get('proxy') is True or raw.get('attribution') in ('proxy', 'tunnel', 'redirect'):
             flow.guards.add('unsupported_proxy')
         if raw.get('shared_transport') is True:
             flow.guards.add('shared_transport')
+
+    def _enrich(self, flow, raw):
+        self._protect(flow, raw)
+        protocol = raw.get('detected_protocol_name')
+        if isinstance(protocol, str) and len(protocol) <= 128:
+            if _protocol_key(flow.protocol) in _GENERIC or _protocol_key(protocol) not in _GENERIC:
+                flow.protocol = protocol
+        application = raw.get('detected_application_name')
+        if isinstance(application, str) and len(application) <= 128:
+            if _protocol_key(flow.application) in _GENERIC or _protocol_key(application) not in _GENERIC:
+                flow.application = application
         host = raw.get('host_server_name')
         if isinstance(host, str) and host:
             try:
@@ -451,18 +569,22 @@ class Engine:
             flow.host = host
 
     def _stats(self, flow, raw, now, wall, closed):
+        # Protection may arrive without usable counters. A rejected byte report
+        # must not discard a valid opt-out for the same flow incarnation.
+        if raw.get('first_seen_at', flow.birth) != flow.birth:
+            flow.guards.add('identity_changed')
+            self._invalidate_flow(flow, now, 'identity_mismatches')
+            return
+        self._protect(flow, raw)
         up, down, total, seen = (raw.get(field) for field in
                                  ('local_bytes', 'other_bytes', 'total_bytes', 'last_seen_at'))
         if (not all(_integer(value) for value in (up, down, total, seen))
                 or up + down > MAX_COUNTER or seen < flow.birth):
             self._invalidate_flow(flow, now, 'invalid_events')
             return
-        # Stats may also carry birth. It is an identity guard, never a source
-        # from which to reconstruct missing metadata.
-        birth = raw.get('first_seen_at', flow.birth)
-        if birth != flow.birth:
-            self._invalidate_flow(flow, now, 'identity_mismatches')
-            return
+        # Classification can arrive with stats, even a repeated/zero report.
+        # Apply protections only after validating this incarnation's identity.
+        self._enrich(flow, raw)
         if flow.total is not None and total == flow.total:
             self.counters['duplicates'] += 1
             if closed and (flow.seen is None or seen >= flow.seen):
@@ -484,6 +606,9 @@ class Engine:
                 or (previous_total is not None and total - previous_total != up + down)):
             self._invalidate_flow(flow, now, 'counter_gaps')
             return
+        if up + down == 0:
+            self.counters['zero_delta_events'] += 1
+            return
         age = wall - seen / 1000
         start_seen = flow.birth if previous_seen is None else previous_seen
         interval = (seen - start_seen) / 1000
@@ -492,8 +617,6 @@ class Engine:
             return
         if now < flow.suppressed_until:
             self.counters['suppressed_events'] += 1
-            return
-        if up + down == 0:
             return
         end = min(now, now - age)
         start = end - interval
@@ -582,25 +705,30 @@ class Engine:
             if eligible and up + down:
                 upload += up
                 download += down
-                peers[flow.peer] = peers.get(flow.peer, 0) + up
+                values = peers.setdefault(peer_key(flow.peer), [0, 0])
+                values[0] += up
+                values[1] += down
         return {'peers': len(peers),
-                'serving_peers': sum(value >= 64 * KIB for value in peers.values()),
+                'serving_peers': sum(up >= 64 * KIB and up >= 3 * max(down, 1)
+                                     for up, down in peers.values()),
                 'upload': upload, 'download': download,
                 'upload_minutes': sum(value >= MIB for value in minutes.values())}, own
 
     def _global_until(self):
         return max(self._incomplete_until,
-                   max((seen + WINDOW for seen, _ in self.missing.values()), default=0))
+                   max((request[0] + WINDOW for request in self.missing.values()), default=0))
 
     def coverage(self, now):
         """Bounded, explicit resource/coverage diagnostics; no packet history."""
         return {
+            'engine_revision': 5,
             'global_wait_seconds': round(max(0, self._global_until() - now), 1),
             'unresolved_metadata': len(self.missing),
             'last_gap': self.last_gap, 'last_gap_scope': self.last_gap_scope,
             'last_gap_age_seconds': None if self.last_gap_at is None else round(max(0, now - self.last_gap_at), 1),
             'resources': {
                 'flow_identities': {'used': len(self.flows), 'limit': MAX_FLOWS},
+                'closed_cursors': {'used': len(self.closed_cursors), 'limit': MAX_CLOSED_CURSORS},
                 'active_groups': {'used': len(self.groups), 'limit': MAX_GROUPS},
                 'samples': {'used': self._sample_count, 'limit': MAX_SAMPLES},
                 'ignored_identities': {'used': len(self.ignored), 'limit': MAX_IGNORED},
@@ -671,8 +799,6 @@ class Engine:
                     guards.add('incomplete_window')
                 if key not in self.groups:
                     guards.add('short_window_only')
-                if len(members) > MAX_GROUP_FLOWS:
-                    guards.add('group_capacity')
                 if now < flow.suppressed_until:
                     guards.add('suppressed')
                 if up < 64 * KIB or up < 3 * max(down, 1):
@@ -696,6 +822,48 @@ class Engine:
                 })
         self.last_candidate_count = len(rows)
         return sorted(rows, key=lambda row: (-max(row['score'], row['device_score']), -row['score'], -row['upload'], row['id']))
+
+    def fast_metadata(self, now):
+        """Identity/protection only; Netify byte totals never enter fast scoring."""
+        rows = []
+        for flow in self.flows.values():
+            if self.tuples.get(self._tuple(flow)) != flow.key:
+                continue
+            guards = set(flow.guards)
+            if self._allowlisted(flow):
+                guards.add('allowlisted')
+            if now < flow.suppressed_until:
+                guards.add('suppressed')
+            # Ports identify actions, not behavior cohorts. Keep independently
+            # identified applications/hosts apart to avoid lending a P2P score
+            # to an unrelated upload by the same client. Unclassified traffic
+            # still needs all independent distribution and current-flow gates.
+            application = _protocol_key(flow.application)
+            label = (('application', application) if application not in _GENERIC else
+                     ('host', flow.host) if flow.host else ('protocol', _protocol_key(flow.protocol)))
+            cohort = _identifier((flow.key[0], flow.mac, flow.proto, label))
+            rows.append(dict(id=_identifier((flow.key, flow.birth)), group=_identifier(flow.group),
+                             cohort=cohort, application=flow.application,
+                             scope=_identifier((flow.key[0], flow.mac, flow.proto)),
+                             interface=flow.key[0], mac=flow.mac, ip=flow.ip, peer=flow.peer,
+                             sport=flow.sport, dport=flow.dport, proto=flow.proto,
+                             protocol=flow.protocol or ('TCP' if flow.proto == 6 else 'UDP'),
+                             host=flow.host, birth=flow.birth, guards=sorted(guards), closed=flow.closed))
+        return rows
+
+    def protection_update(self, key):
+        """O(1) lookup after consuming a report, including malformed counters."""
+        flow = self.flows.get(key)
+        if flow is None:
+            return None
+        guards = set(flow.guards) & REVOKING_GUARDS
+        if self._allowlisted(flow):
+            guards.add('allowlisted')
+        if not guards:
+            return None
+        return dict(id=_identifier((flow.key, flow.birth)), guards=sorted(guards),
+                    interface=flow.key[0], mac=flow.mac, ip=flow.ip, peer=flow.peer,
+                    sport=flow.sport, dport=flow.dport, proto=flow.proto)
 
     def suppress(self, row, until):
         """Remove only the blocked tuple's evidence; retries cannot renew it.

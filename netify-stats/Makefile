@@ -49,7 +49,7 @@ define Package/luci-app-netify-stats/install
 	$(INSTALL_BIN) ./packaging/post-install $(1)/usr/lib/netify-stats/package-post-install
 	$(INSTALL_BIN) ./packaging/pre-deinstall $(1)/usr/lib/netify-stats/package-pre-deinstall
 	$(INSTALL_DATA) ./netify_accounting.py ./netify_classify.py ./netify_control.py ./netify_storage.py ./netify_proxy.py ./netify_query.py ./netify_update.py ./netify_wan.py ./netify_features.py ./netify_minute.py $(1)/usr/lib/netify-stats/
-	$(INSTALL_DATA) ./features/anti_pcdn/__init__.py ./features/anti_pcdn/config.py ./features/anti_pcdn/engine.py ./features/anti_pcdn/scoring.py ./features/anti_pcdn/conntrack.py ./features/anti_pcdn/firewall.py ./features/anti_pcdn/runtime.py $(1)/usr/lib/netify-stats/anti_pcdn/
+	$(INSTALL_DATA) ./features/anti_pcdn/__init__.py ./features/anti_pcdn/config.py ./features/anti_pcdn/engine.py ./features/anti_pcdn/scoring.py ./features/anti_pcdn/conntrack.py ./features/anti_pcdn/firewall.py ./features/anti_pcdn/runtime.py ./features/anti_pcdn/observation.py ./features/anti_pcdn/fast.py ./features/anti_pcdn/history.py $(1)/usr/lib/netify-stats/anti_pcdn/
 	$(INSTALL_DATA) ./rules/community-rules.json ./rules/COMMUNITY-LICENSE ./rules/NEXTDNS-LICENSE $(1)/usr/share/netify-stats/
 	$(INSTALL_DATA) ./LICENSE $(1)/usr/share/licenses/luci-app-netify-stats/LICENSE
 	$(INSTALL_DATA) ./acl.json $(1)/usr/share/rpcd/acl.d/luci-app-netify-stats.json

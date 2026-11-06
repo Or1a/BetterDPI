@@ -1207,7 +1207,7 @@ msgstr "所選時間範圍"
 msgid "Chart window: %s to %s. Totals and rankings use the time range selected above."
 msgstr "圖表時間範圍：%s 至 %s。總量和排行榜使用上方選擇的時間範圍。"
 
-msgid "Application and traffic filters use hourly bars for the selected time range."
+msgid "Application and traffic filters use hourly curves for the selected time range."
 msgstr "應用和流量篩選採用所選時間範圍的小時長條圖。"
 
 msgid "No minute history yet. New observations will appear here; earlier minutes cannot be reconstructed."
@@ -1329,3 +1329,153 @@ msgstr "待恢復連線中繼資料："
 
 msgid "Window wait:"
 msgstr "視窗等待："
+
+msgid "Shadow decision history"
+msgstr "模擬封鎖記錄"
+
+msgid "Observation records never install rules. Protected VPN, proxy and allowlisted connections are excluded."
+msgstr "觀察記錄不會安裝封鎖規則。受保護的 VPN、代理及白名單連線不參與模擬封鎖。"
+
+msgid "A simulated block is a scoring proposal; firewall enforcement has not been checked. Other records show why a connection was not eligible."
+msgstr "模擬封鎖表示評分條件已滿足，尚未檢查防火牆執行能力；其他記錄說明連線未達到條件的原因。"
+
+msgid "Observation recording failed:"
+msgstr "觀察記錄寫入失敗："
+
+msgid "Records written in this session:"
+msgstr "本次執行已寫入記錄："
+
+msgid "Local rotating history, up to 8 MiB. Collector restarts keep the files; router reboots clear them. The latest 20 records from this session are shown."
+msgstr "日誌僅儲存在路由器本機，輪替保留最多 8 MiB；重新啟動採集器不清除檔案，重新啟動路由器會清除。此處顯示本次執行最近 20 筆記錄。"
+
+msgid "Recorded at"
+msgstr "記錄時間"
+
+msgid "Shadow decision"
+msgstr "模擬決策"
+
+msgid "Simulated block; not executed"
+msgstr "擬封鎖；未執行"
+
+msgid "Threshold reached; evidence incomplete"
+msgstr "達到門檻；證據不完整"
+
+msgid "Decision unavailable"
+msgstr "決策無法取得"
+
+msgid "Completed connection replay guards"
+msgstr "已結束連線去重游標"
+
+msgid "Zero-byte reports ignored"
+msgstr "已忽略的零位元組報告"
+
+msgid "Reports outside the observation window"
+msgstr "觀察視窗以外的報告"
+
+msgid "Repeated unresolved reports"
+msgstr "重複的未歸屬報告"
+
+msgid "Completed identities compacted"
+msgstr "已壓縮的結束連線身分"
+
+msgid "Completed excluded identities released"
+msgstr "已釋放的排除連線身分"
+
+msgid "Completed replay guard limit"
+msgstr "結束連線去重游標上限"
+
+msgid "Completed connection counter conflicts"
+msgstr "已結束連線計數衝突"
+
+msgid "Repeated completed metadata"
+msgstr "重複的結束連線中繼資料"
+
+msgid "Previous connection evidence retained"
+msgstr "已保留的舊連線證據"
+
+msgid "Unique peers in 60 seconds: 20 can add up to 25 points, 40 up to 35, and 80 up to 40. This weight caps the contribution."
+msgstr "最近 60 秒的不同對端：20 個最多加 25 分，40 個最多加 35 分，80 個最多加 40 分；實際加分不超過此權重。"
+
+msgid "Groups with at least 40 peers are also recorded without material upload. These watch-only samples cannot qualify for a simulated block."
+msgstr "至少有 40 個對端的連線組，即使沒有實質上傳也會記錄。這類純觀察樣本不會成為模擬封鎖提議。"
+
+msgid "High peer count; observation only"
+msgstr "對端數量多；僅供觀察"
+
+msgid "Multiple upload-dominant peers"
+msgstr "多個以上傳為主的對端"
+
+msgid "Repeated upload progress"
+msgstr "連續上傳進展"
+
+msgid "Fast distribution detection checks new connection bytes every second. It can qualify after 2 MiB across at least 8 upload-dominant peers, without waiting for a full window."
+msgstr "快速分發偵測每秒檢查連線新增位元組：至少 8 個以上傳為主的對端、合計達到 2 MiB 後即可滿足流量條件，無需等待完整視窗。"
+
+msgid "Fast detection unavailable:"
+msgstr "快速偵測不可用："
+
+msgid "Fast distribution evidence"
+msgstr "快速分發證據"
+
+msgid "Seconds observed:"
+msgstr "已觀察秒數："
+
+msgid "Connection upload at trigger:"
+msgstr "觸發時連線已上傳："
+
+msgid "Fast counter coverage:"
+msgstr "快速計數涵蓋連線數："
+
+msgid "Connections without matching DPI identity:"
+msgstr "未匹配 DPI 身分的連線："
+
+msgid "Upload distribution across rotating peers"
+msgstr "輪換對端的上傳分發"
+
+msgid "Repeated cross-port distribution"
+msgstr "持續跨連接埠分發"
+
+msgid "Fast detection combines ports and checks new bytes every second. Bursts need 8 uploading peers; rotating uploads need 4 peers across 3 networks and 2 MiB of distributed evidence. A 30-minute lookback does not require waiting 30 minutes."
+msgstr "快速識別每秒檢查新增流量，並跨連接埠彙總。突發分發需 8 個上傳對端；輪換分發需涵蓋 3 個網段的 4 個對端及 2 MiB 分發證據。回看 30 分鐘不代表必須等待 30 分鐘。"
+
+msgid "History alone cannot trigger a decision: new peers need 512 KiB of current upload, returning qualified peers need 32 KiB, with repeated upload progress. VPN and allowlist protections take priority."
+msgstr "歷史記錄不能單獨觸發判定：新對端還需本次上傳 512 KiB，已滿足條件的回訪對端需 32 KiB，並持續產生上傳。VPN 和允許清單始終優先。"
+
+msgid "Distribution history unavailable:"
+msgstr "分發歷史無法使用："
+
+msgid "Cross-port uploading peers:"
+msgstr "跨連接埠上傳對端："
+
+msgid "Distributed upload evidence:"
+msgstr "分發上傳證據："
+
+msgid "Cross-port history:"
+msgstr "跨連接埠歷史："
+
+msgid "Qualified distribution groups:"
+msgstr "達到分發條件的群組："
+
+msgid "Counter sample time:"
+msgstr "計數取樣耗時："
+
+msgid "Failed reads:"
+msgstr "讀取失敗："
+
+msgid "Recovered reads:"
+msgstr "恢復讀取："
+
+msgid "This forwarding path cannot currently enforce automatic blocks. Scoring and observation continue."
+msgstr "目前轉發路徑暫不支援自動封鎖，評分和觀察繼續運作。"
+
+msgid "Fast peer diversity counts IPv4 addresses and IPv6 /64 prefixes; multiple addresses do not prove multiple machines."
+msgstr "快速識別按 IPv4 位址和 IPv6 /64 前綴計算對端多樣性；多個位址不代表多台機器。"
+
+msgid "Records waiting to be written:"
+msgstr "等待寫入的記錄："
+
+msgid "Records lost to recording limits:"
+msgstr "因記錄限制而遺失："
+
+msgid "Platform precheck failed; this score is not an executable block."
+msgstr "平台預檢未通過；此次評分不代表可以執行封鎖。"

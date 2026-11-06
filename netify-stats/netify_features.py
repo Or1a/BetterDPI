@@ -77,6 +77,10 @@ class FeatureBridge:
                 self.worker.connected = connected
                 self.worker.gap('collector_reconnected' if connected else 'collector_disconnected')
 
+    def gap(self, reason):
+        if self.active and self.worker:
+            self.worker.gap(reason)
+
     def metadata_requests(self):
         if not self.active or self.worker is None:
             return (), None

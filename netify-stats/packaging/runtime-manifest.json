@@ -30,9 +30,12 @@
   "features/anti_pcdn/scoring.py": ["/usr/lib/netify-stats/anti_pcdn/scoring.py", "0644"],
   "features/anti_pcdn/conntrack.py": ["/usr/lib/netify-stats/anti_pcdn/conntrack.py", "0644"],
   "features/anti_pcdn/firewall.py": ["/usr/lib/netify-stats/anti_pcdn/firewall.py", "0644"],
+  "features/anti_pcdn/observation.py": ["/usr/lib/netify-stats/anti_pcdn/observation.py", "0644"],
   "features/anti_pcdn/runtime.py": ["/usr/lib/netify-stats/anti_pcdn/runtime.py", "0644"],
   "anti_pcdn_rpc.py": ["/usr/libexec/rpcd/betterdpi-anti-pcdn", "0755"],
   "anti-pcdn-acl.json": ["/usr/share/rpcd/acl.d/luci-app-betterdpi-anti-pcdn.json", "0644"],
   "anti-pcdn-menu.json": ["/usr/share/luci/menu.d/luci-app-betterdpi-anti-pcdn.json", "0644"],
-  "anti-pcdn.js": ["/www/luci-static/resources/view/status/anti-pcdn.js", "0644"]
+  "anti-pcdn.js": ["/www/luci-static/resources/view/status/anti-pcdn.js", "0644"],
+  "features/anti_pcdn/history.py": ["/usr/lib/netify-stats/anti_pcdn/history.py", "0644"],
+  "features/anti_pcdn/fast.py": ["/usr/lib/netify-stats/anti_pcdn/fast.py", "0644"]
 }

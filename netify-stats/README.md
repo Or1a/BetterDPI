@@ -61,6 +61,22 @@ V0.3.2 增加以下 WAN/VPN 独立计量；V0.3.1 增加分层存储，其余维
 
 接口面板绑定的内核名称应与 Netify WAN 事件的 `interface` 字段一致，才显示差额。未开启 WAN 抓包时，新增 Netify 外部采集本身可能增加 CPU 开销，需在路由器上观察；本插件不能凭空恢复 Netify 没有提供的明细。
 
+## 代码结构与维护边界
+
+| 入口与模块 | 职责 | 必须保留的边界 |
+| --- | --- | --- |
+| `netify_collector.py`、`netify_proxy.py` | 解析实时事件、恢复归属、协调提交与维护 | 导出快照不记流量；解析失败统一记录缺口并通知可选订阅者 |
+| `netify_accounting.py`、`netify_wan.py`、`netify_minute.py` | 接口计数、WAN 增量、分钟曲线投影 | LAN、WAN、接口三组账不相加，分钟表不作为新的总量来源 |
+| `netify_storage.py` | 事务、字典、分层保留与容量回收 | 归档增加与源明细删除在同一事务；不根据检测分数改动总账 |
+| `netify_rpc.py`、`netify_query.py`、`netify_classify.py` | 同一快照内查询、分类、筛选及分页 | 总量、设备和展开明细口径一致；大明细分批读取，保留旧 schema 的空标签 |
+| `netify_features.py`、`features/anti_pcdn/` | 可选实时订阅、独立检测和受保护的逐连接执行 | 检测包不依赖统计数据库或查询模块；计量与查询不依赖可选检测 |
+| `netify_control.py`、`netify_update.py`、安装钩子 | 服务状态、显式更新与生命周期 | 页面轮询不启动服务、不联网检查升级；包管理操作沿用锁与进程身份验证 |
+| 两个 LuCI 页面 | 展示、筛选和显式操作 | 用户草稿与异步请求隔离；曲线缺口保持可见，不插补成真实流量 |
+
+Anti-PCDN 的默认权重和保护集合集中在 `scoring.py`；日志豁免与身份冲突撤销保持不同含义。内核采样与动作前复核使用同一个连接索引规则，归属冲突不会被“最后一条记录覆盖”。快速路径在更新与保护检查完成后统一生成候选，避免每轮重复评分。运行器的证据重置和规则清理分别只有一个入口；状态发布只写状态，平台预检与规则维护在明确的维护步骤执行。
+
+安装清单检查同时约束模块依赖方向，防止日后把可选检测接回总账。兼容旧存储 schema、双向计数、迟到代理纠正、租约保护及资源上限都有行为意义，不按重复文本直接合并。当前对低对端上传、极短连接和执行吞吐的限制见 [整体算法审查](../docs/anti-pcdn-design.md#整体算法审查仍然存在的边界)，本轮结构精简不扩大自动处置范围。
+
 ## 安装准备
 
 `Makefile` 是已在对应 OpenWrt SDK 构建的配方，依赖 Netify、Python 3/SQLite、LuCI 和 rpcd。安装内容以 `packaging/runtime-manifest.json` 核对，包括查询模块和共享生命周期脚本。包不携带默认用户设置，不覆盖已有 `/etc/netify-stats.json`；sysupgrade 保留清单只包含该小配置，不包含统计。
@@ -83,9 +99,12 @@ node test_classification_ui.cjs
 node test_diagnostics_ui.cjs
 node test_filter_ui.cjs
 node test_update_ui.cjs
+node test_anti_pcdn_ui.cjs
 python3 packaging/check_preparation.py
 ```
 
 检查工具只校验源码，不生成包。`--release` 仍会提示尚未完成的实机生命周期验证。迟到代理映射回归可单独运行 `python3 reproduce_late_original.py`，成功时退出 0。
+
+模拟接口与进程状态的单元测试不读取开发机的真实 Linux 状态。两项验证 `/proc` 与真实 fork/exec 交接的升级器测试只在 Linux 执行；macOS 会明确跳过，发布验证仍须在 Linux 完整运行。
 
 只通过 SSH、命令行和后端接口验证路由器。历史 `test_ui.cjs` 使用浏览器，已退出当前验证流程，不运行、不纳入后续发布源文件清单。手机视觉布局仍需用户实机确认，静态测试不等于视觉验收。

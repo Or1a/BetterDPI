@@ -27,6 +27,28 @@ def _counts(**labels):
     return dict(upload=0, download=0, flows=0, **labels)
 
 
+def _add_device(devices, mac, ip, upload, download, flows):
+    if mac not in devices:
+        devices[mac] = _counts(mac=mac, ip=ip or '')
+    item = devices[mac]
+    item['ip'] = max(item['ip'], ip or '')
+    _add(item, upload, download, flows)
+
+
+def _detail_rows(db, table, columns, where, args, native_column, keys):
+    """Bound SQL parameters and retain nullable labels in legacy databases."""
+    keys = list(keys)
+    for offset in range(0, len(keys), 256):
+        batch = keys[offset:offset + 256]
+        values = [value for value in batch if value is not None]
+        clauses = [native_column + ' IN (%s)' % ','.join('?' for _ in values)] if values else []
+        if None in batch:
+            clauses.append(native_column + ' IS NULL')
+        sql = ('SELECT %s,SUM(upload),SUM(download),SUM(flows) FROM %s '
+               'WHERE %s AND (%s) GROUP BY %s') % (columns, table, where, ' OR '.join(clauses), columns)
+        yield from db.execute(sql, args + values)
+
+
 def empty_classification_coverage():
     return {level: _counts() for level in ('application', 'domain', 'protocol', 'unknown')}
 
@@ -208,11 +230,7 @@ def _aggregate(db, start, device, now, classifier, names, latest_ips,
             mac, ip = device_labels[key]
         else:
             bucket, mac, ip, upload, download, flows = row
-        if mac not in devices:
-            devices[mac] = _counts(mac=mac, ip=ip)
-        else:
-            devices[mac]['ip'] = max(devices[mac]['ip'], ip)
-        _add(devices[mac], upload, download, flows)
+        _add_device(devices, mac, ip, upload, download, flows)
         _add(total, upload, download, flows)
         hour = hour_totals.setdefault(bucket, [0, 0])
         hour[0] += upload
@@ -241,20 +259,12 @@ def _aggregate(db, start, device, now, classifier, names, latest_ips,
             _add(apps[app], upload, download, flows)
             apps[app]['has_archived_data'] = True
             mac, ip = device_labels[key]
-            if mac not in devices:
-                devices[mac] = _counts(mac=mac, ip=ip)
-            else:
-                devices[mac]['ip'] = max(devices[mac]['ip'], ip)
-            _add(devices[mac], upload, download, flows)
+            _add_device(devices, mac, ip, upload, download, flows)
             _add(total, upload, download, flows)
             _add(archived_total, upload, download, flows)
             if app in requested:
                 members = archive_devices.setdefault(app, {})
-                if mac not in members:
-                    members[mac] = _counts(mac=mac, ip=ip)
-                else:
-                    members[mac]['ip'] = max(members[mac]['ip'], ip)
-                _add(members[mac], upload, download, flows)
+                _add_device(members, mac, ip, upload, download, flows)
 
     # Reuse completed application aggregates before pagination, rather than
     # incrementing coverage again for every host/protocol row. This is tiny for
@@ -289,12 +299,9 @@ def _aggregate(db, start, device, now, classifier, names, latest_ips,
     selected = {row['id']:row for row in app_rows if row['id'] in expanded}
     if selected:
         app_devices = {key:archive_devices.get(key, {}) for key in selected}
-        native_keys = sorted({key[0] for key, app in detail_members.items() if app in selected})
-        detail_where = where+' AND '+native_column+' IN (%s)' % ','.join('?' for _ in native_keys)
+        native_keys = {key[0] for key, app in detail_members.items() if app in selected}
         detail_columns = device_columns+','+native_column+','+protocol_column+','+host_column
-        sql = 'SELECT %s,%s FROM %s WHERE %s GROUP BY %s' % (
-            detail_columns, sums, table, detail_where, detail_columns)
-        for row in db.execute(sql, args+native_keys):
+        for row in _detail_rows(db, table, detail_columns, where, args, native_column, native_keys):
             if normalized:
                 key, native_key, protocol_key, host_key, upload, download, flows = row
                 mac, ip = device_labels[key]
@@ -303,11 +310,7 @@ def _aggregate(db, start, device, now, classifier, names, latest_ips,
             app = detail_members.get((native_key, protocol_key, host_key))
             if app not in selected:
                 continue
-            if mac not in app_devices[app]:
-                app_devices[app][mac] = _counts(mac=mac, ip=ip)
-            else:
-                app_devices[app][mac]['ip'] = max(app_devices[app][mac]['ip'], ip)
-            _add(app_devices[app][mac], upload, download, flows)
+            _add_device(app_devices[app], mac, ip, upload, download, flows)
         for app, row in selected.items():
             row['hosts'] = nsmallest(5, detail_hosts.get(app, {}).values(), key=lambda x:(-x['upload']-x['download'],x['name']))
             row['devices'] = sorted(app_devices[app].values(), key=lambda x:(-x['upload']-x['download'],x['mac']))

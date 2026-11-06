@@ -53,6 +53,266 @@ class Stream:
 
 
 class ScoringTests(unittest.TestCase):
+    def test_fanout_cap_rewards_large_counts_without_overweighting_ordinary_fanout(self):
+        weights = dict(engine.validate({})['weights'], fanout=40, domain=5)
+        for peers, expected in ((0, 0), (19, 0), (20, 25), (39, 25),
+                                (40, 35), (79, 35), (80, 40), (100000, 40)):
+            with self.subTest(peers=peers):
+                self.assertEqual(score({'peers': peers}, weights=weights)[0], expected)
+                self.assertEqual(score({'peers': peers})[0], min(expected, 25))
+                self.assertEqual(score({'peers': peers}, weights=dict(weights, fanout=10))[0],
+                                 min(expected, 10))
+        self.assertEqual(score({'peers': 100000}, True, weights)[0], 45)
+
+    def test_strong_fanout_can_flag_serving_connections_in_a_mixed_download_group(self):
+        weights = dict(engine.validate({})['weights'], fanout=40, domain=5)
+        stream = Stream(weights=weights)
+        for number in range(80):
+            stream.metadata(number)
+        for now in range(10, 331, 10):
+            for number in range(80):
+                stream.event(number, now, up=64*KIB if number < 20 else KIB,
+                             down=KIB if number < 20 else 256*KIB)
+        rows = stream.engine.candidates(330)
+        self.assertTrue(all(row['score'] == 80 for row in rows))
+        self.assertTrue(all(row['metrics']['download'] > row['metrics']['upload'] for row in rows))
+        self.assertEqual(sum(row['decision'] == 'block' for row in rows), 20)
+        self.assertEqual(sum('not_uploading' in row['guards'] for row in rows), 60)
+        stream.engine.settings['weights'] = engine.validate({})['weights']
+        self.assertTrue(all(row['score'] == 65 and row['decision'] == 'observe'
+                            for row in stream.engine.candidates(330)))
+        stream.engine.settings['weights'] = weights
+        stream.engine.gap(331, 'test_missing_evidence')
+        self.assertTrue(all(row['decision'] == 'observe' and 'incomplete_window' in row['guards']
+                            for row in stream.engine.candidates(331)))
+
+    def test_many_small_peers_or_many_flows_to_one_peer_do_not_authorize_blocking(self):
+        weights = dict(engine.validate({})['weights'], fanout=40, domain=5)
+        small = Stream(weights=weights)
+        rows = small.populate(count=80, up=100, down=100)
+        self.assertTrue(all(row['score'] == 40 and row['decision'] == 'observe' for row in rows))
+        repeated = Stream(weights=weights)
+        for number in range(80):
+            repeated.metadata(number, other_ip='11.0.0.1', other_port=20000 + number)
+        for now in range(10, 331, 10):
+            for number in range(80):
+                repeated.event(number, now)
+        rows = repeated.engine.candidates(330)
+        self.assertTrue(all(row['metrics']['peers'] == 1 and row['decision'] == 'observe' for row in rows))
+        self.assertFalse(any(reason['id'] == 'fanout' for row in rows for reason in row['reasons']))
+
+    def test_increased_fanout_preserves_vpn_proxy_shared_and_allowlist_guards(self):
+        weights = dict(engine.validate({})['weights'], fanout=40, domain=5)
+        cases = [({'detected_protocol_name': 'WireGuard'}, {}, 'protected_transport'),
+                 ({'proxy': True}, {}, 'unsupported_proxy'),
+                 ({'shared_transport': True}, {}, 'shared_transport'),
+                 ({}, {'allow_devices': [MAC]}, 'allowlisted')]
+        for metadata, settings, guard in cases:
+            with self.subTest(guard=guard):
+                stream = Stream(weights=weights, threshold=1, **settings)
+                rows = stream.populate(count=80, **metadata)
+                self.assertTrue(rows)
+                self.assertTrue(all(row['decision'] == 'observe' and guard in row['guards'] for row in rows))
+
+    def test_new_incarnation_retains_evidence_without_resetting_unrelated_members(self):
+        stream = Stream()
+        stream.populate()
+        old = stream.engine.flows[('br-lan', '0')]
+        samples = sum(sample[1] for sample in old.samples)
+        group = stream.engine.groups[old.group]
+        deadline = group.valid_after
+        stream.metadata(0, 331)
+        stream.totals[0] = 0
+        stream.event(0, 340)
+        for number in range(1, 20):
+            stream.event(number, 340)
+        self.assertEqual(group.valid_after, deadline)
+        self.assertTrue(old.closed)
+        self.assertEqual(len(old.key), 3)
+        self.assertEqual(sum(sample[1] for sample in old.samples), samples - 64*KIB)
+        rows = stream.engine.candidates(340)
+        self.assertEqual(sum(row['decision'] == 'block' for row in rows), 19)
+        fresh = next(row for row in rows if row['birth'] == (BASE + 331)*1000)
+        self.assertIn('incomplete_window', fresh['guards'])
+        self.assertLessEqual(len(stream.engine.flows), engine.MAX_FLOWS)
+
+    def test_new_digest_preserves_old_downloads_and_cannot_make_group_more_suspicious(self):
+        stream = Stream()
+        stream.populate(up=KIB, down=MIB)
+        before = stream.engine.candidates(330)[0]['metrics']['download']
+        stream.metadata(1000, 331, other_ip='11.0.0.1')
+        stream.event(1000, 340, up=64*KIB, down=KIB)
+        for number in range(1, 20):
+            stream.event(number, 340, up=KIB, down=MIB)
+        row = next(row for row in stream.engine.candidates(340) if row['birth'] == (BASE + 331)*1000)
+        self.assertGreater(row['metrics']['download'], before - 2*MIB)
+        self.assertEqual(row['score'], 25)
+        self.assertEqual(row['decision'], 'observe')
+
+    def test_more_than_64_identities_do_not_veto_a_complete_upload_group(self):
+        for count in (65, 128):
+            with self.subTest(count=count):
+                stream = Stream()
+                for number in range(count):
+                    stream.metadata(number)
+                for now in range(10, 331, 10):
+                    for number in range(20):
+                        stream.event(number, now)
+                rows = stream.engine.candidates(330)
+                self.assertEqual(len(rows), 20)
+                self.assertTrue(all(row['score'] == 80 and row['decision'] == 'block' for row in rows))
+                self.assertEqual(len(stream.engine.groups), 1)
+                self.assertEqual(stream.engine.counters['capacity_drops'], 0)
+
+    def test_large_group_keeps_download_evidence_and_global_sample_budget(self):
+        stream = Stream()
+        for number in range(100):
+            stream.metadata(number)
+        for now in range(10, 331, 10):
+            for number in range(100):
+                stream.event(number, now, up=64*KIB if number < 20 else KIB,
+                             down=KIB if number < 20 else MIB)
+        rows = stream.engine.candidates(330)
+        self.assertTrue(all(row['score'] < 80 and row['decision'] == 'observe' for row in rows))
+        self.assertLessEqual(stream.engine._sample_count, engine.MAX_SAMPLES)
+        self.assertFalse(any('group_capacity' in row['guards'] for row in rows))
+
+    def test_zero_byte_and_expired_unknown_reports_do_not_poison_complete_groups(self):
+        stream = Stream()
+        stream.populate()
+        for number in range(1000, 1000 + engine.MAX_RECOVERY + 1):
+            stream.event(number, 331, up=0, down=0, kind='flow_purge')
+        stream.event(2000, 332, last_seen_at=(BASE - 60) * 1000)
+        self.assertFalse(stream.engine.missing)
+        self.assertEqual(stream.engine.coverage(332)['global_wait_seconds'], 0)
+        self.assertTrue(all(row['decision'] == 'block' for row in stream.engine.candidates(332)))
+        self.assertEqual(stream.engine.counters['zero_delta_events'], engine.MAX_RECOVERY + 1)
+        self.assertEqual(stream.engine.counters['expired_delta_events'], 1)
+
+    def test_zero_byte_unknown_report_does_not_clear_or_extend_a_real_loss(self):
+        stream = Stream()
+        stream.populate()
+        stream.event(1000, 331)
+        until = stream.engine._global_until()
+        stream.event(1000, 340, up=0, down=0)
+        self.assertEqual(stream.engine._global_until(), until)
+        self.assertEqual(len(stream.engine.missing), 1)
+        self.assertTrue(all(row['decision'] == 'observe' for row in stream.engine.candidates(340)))
+
+    def test_replayed_unknown_increment_does_not_extend_metadata_quarantine(self):
+        stream = Stream()
+        stream.populate()
+        message = stream.event(1000, 331)
+        deadline = stream.engine._global_until()
+        stream.engine.observe(message, 340, BASE + 340)
+        self.assertEqual(stream.engine._global_until(), deadline)
+        self.assertEqual(stream.engine.counters['duplicate_missing_events'], 1)
+        stream.event(1000, 341)
+        self.assertGreater(stream.engine._global_until(), deadline)
+
+    def test_zero_delta_with_a_changed_watermark_still_marks_real_missing_bytes(self):
+        stream = Stream()
+        stream.populate()
+        stream.event(0, 340, up=0, down=0, total_bytes=stream.totals[0] + MIB)
+        self.assertEqual(stream.engine.counters['counter_gaps'], 1)
+        self.assertTrue(all('incomplete_window' in row['guards'] for row in stream.engine.candidates(340)))
+
+    def test_zero_byte_delayed_known_purge_does_not_invalidate_unrelated_group_evidence(self):
+        stream = Stream()
+        stream.metadata(100, 0)
+        stream.populate()
+        stream.event(100, 331, up=0, down=0, kind='flow_purge', last_seen_at=BASE*1000)
+        self.assertEqual(stream.engine.counters['delayed_events'], 0)
+        self.assertTrue(all(row['decision'] == 'block' for row in stream.engine.candidates(331)))
+
+    def test_closed_empty_identities_are_compacted_without_replaying_final_bytes(self):
+        stream = Stream()
+        with patch.object(engine, 'MAX_FLOWS', 2):
+            stream.metadata(0)
+            stream.metadata(1)
+            final = stream.event(0, 1, up=100, down=200, kind='flow_purge')
+            stream.event(1, 1, up=100, down=200, kind='flow_purge')
+            stream.engine.candidates(80)
+            self.assertFalse(stream.engine.flows)
+            self.assertEqual(len(stream.engine.closed_cursors), 2)
+            stream.metadata(2, 80)
+            stream.event(2, 90)
+            stream.engine.observe(final, 90, BASE + 90)
+        self.assertEqual(stream.engine.counters['capacity_drops'], 0)
+        self.assertEqual(stream.engine.counters['duplicates'], 1)
+        self.assertEqual(stream.engine.counters['accepted_events'], 3)
+        self.assertEqual(stream.engine.counters['clock_gaps'], 0)
+        self.assertEqual(stream.engine.candidates(90)[0]['upload'], 64*KIB)
+        stream.metadata(0, 90, first_seen_at=BASE*1000)
+        self.assertNotIn(('br-lan', '0'), stream.engine.flows)
+
+    def test_compacted_cursor_still_detects_zero_delta_counter_loss_and_new_birth(self):
+        stream = Stream()
+        stream.metadata(0)
+        stream.event(0, 1, up=100, down=200, kind='flow_purge')
+        stream.engine.candidates(80)
+        stream.event(0, 90, up=0, down=0, total_bytes=301)
+        self.assertEqual(stream.engine.counters['closed_cursor_conflicts'], 1)
+        self.assertEqual(stream.engine.last_gap_scope, 'group')
+        stream.event(0, 100, up=100, down=200, total_bytes=300,
+                     first_seen_at=(BASE + 90)*1000)
+        self.assertEqual(len(stream.engine.missing), 1)
+        self.assertEqual(stream.engine.counters['duplicates'], 0)
+        stream.metadata(0, 101, first_seen_at=(BASE + 90)*1000)
+        self.assertFalse(stream.engine.missing)
+        self.assertFalse(stream.engine.closed_cursors)
+
+    def test_closed_cursor_alias_guard_new_birth_expiry_and_hard_capacity(self):
+        stream = Stream()
+        stream.metadata(0)
+        stream.event(0, 1, up=100, down=200, kind='flow_purge')
+        stream.engine.candidates(80)
+        stream.metadata(100, 80, first_seen_at=BASE*1000, other_ip='11.0.0.1')
+        self.assertNotIn(('br-lan', '100'), stream.engine.flows)
+        self.assertEqual(stream.engine.counters['duplicate_identities'], 1)
+        stream.metadata(0, 90)
+        stream.totals[0] = 0
+        stream.event(0, 100)
+        self.assertEqual(stream.engine.candidates(100)[0]['upload'], 64*KIB)
+        self.assertFalse(stream.engine.closed_cursors)
+        other = Stream()
+        for number in range(3):
+            other.metadata(number)
+        for number in range(3):
+            other.event(number, 1, up=100, down=200, kind='flow_purge')
+        with patch.object(engine, 'MAX_CLOSED_CURSORS', 2):
+            other.engine.candidates(80)
+        self.assertEqual(len(other.engine.closed_cursors), 2)
+        self.assertEqual(len(other.engine.flows), 1)
+        self.assertEqual(other.engine.counters['clock_gaps'], 0)
+        other.engine.candidates(400)
+        self.assertFalse(other.engine.closed_cursors)
+        self.assertFalse(other.engine.closed_tuples)
+
+    def test_excluded_purge_frees_cache_without_creating_metadata_request(self):
+        stream = Stream()
+        stream.metadata(0, other_type='local')
+        stream.event(0, 10, kind='flow_purge')
+        self.assertFalse(stream.engine.ignored)
+        stream.event(0, 20, up=0, down=0, kind='flow_purge')
+        self.assertFalse(stream.engine.missing)
+
+    def test_short_upload_pause_does_not_discard_the_full_observation_window(self):
+        stream = Stream()
+        stream.populate()
+        group = next(iter(stream.engine.groups.values()))
+        deadline = group.valid_after
+        for now in range(340, 421, 10):
+            for number in range(20):
+                stream.event(number, now, up=100, down=20)
+        self.assertEqual(len(stream.engine.groups), 1)
+        for number in range(20):
+            stream.event(number, 430)
+        self.assertEqual(group.valid_after, deadline)
+        self.assertFalse(any('short_window_only' in row['guards'] for row in stream.engine.candidates(430)))
+        stream.engine.candidates(800)
+        self.assertFalse(stream.engine.groups)
+
     def test_independent_families_are_capped_and_behavior_can_reach_eighty(self):
         metrics = {'peers': 100000, 'serving_peers': 100000,
                    'upload_minutes': 500, 'upload': 20*MIB, 'download': MIB}

@@ -33,7 +33,9 @@ class StatsTest(unittest.TestCase):
             self.assertEqual(instance.db.execute('SELECT COUNT(*) FROM hourly').fetchone()[0],10)
             instance.db.close()
 
-    def test_all_data_has_no_seven_day_retention_or_query_cap(self):
+    def test_all_history_retains_compacted_traffic_without_inventing_dates(self):
+        from pathlib import Path
+        from netify_classify import Classifier
         collector = load('netify_collector')
         rpc = load('netify_rpc')
         with tempfile.TemporaryDirectory() as directory:
@@ -41,23 +43,26 @@ class StatsTest(unittest.TestCase):
             collector.DB_PATH = rpc.DB_PATH = os.path.join(directory, 'stats.db')
             collector.STATUS_PATH = os.path.join(directory, 'status.json')
             instance = collector.Collector()
+            # Use the same available rules on macOS and OpenWrt. Missing host
+            # rules used to prevent compaction and hide this stale expectation.
+            instance.storage._archive_classifier = Classifier(Path(__file__).parent / 'rules/community-rules.json')
             old = int(time.time())//3600*3600 - 30*86400
             instance.db.execute('INSERT INTO hourly VALUES (?,?,?,?,?,?,?,?,?)',
                 (old,'mac','ip','app','TLS','host',123,456,1))
             instance.last_commit = time.monotonic()-4
             instance.maintenance()
             instance.db.commit()
-            for params in ({}, {'hours':0}, {'hours':24*31}):
+            for params in ({}, {'hours':0}):
                 result = rpc.query_summary(params)
                 self.assertEqual(result['total']['download'], 456, str(params))
+                self.assertEqual(result['archived_total']['download'], 456)
+                self.assertTrue(result['history_compacted'])
+                self.assertEqual(result['timeline'], [])
+            # A cumulative archive has no hourly allocation; bounded queries
+            # must not claim those bytes belong to a particular time range.
+            self.assertEqual(rpc.query_summary({'hours':24*31})['total']['download'], 0)
             self.assertEqual(rpc.query_summary({'hours':24})['total']['download'], 0)
             self.assertEqual(rpc.query_summary({'hours':0})['range_start'], old)
-            trend = rpc.query_summary({'hours':0})
-            self.assertLessEqual(len(trend['timeline']), 24)
-            self.assertEqual(sum(row['download'] for row in trend['timeline']), 456)
-            self.assertTrue(any(row['download'] == 0 for row in trend['timeline']))
-            self.assertTrue(all(b['bucket']-a['bucket'] == trend['timeline_resolution_seconds']
-                for a,b in zip(trend['timeline'], trend['timeline'][1:])))
             instance.db.close()
 
     def test_interface_accounting_restart_reset_and_dpi_separation(self):

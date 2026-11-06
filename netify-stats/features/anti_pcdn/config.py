@@ -6,6 +6,8 @@ import os
 import re
 import tempfile
 
+from .scoring import DEFAULT_WEIGHTS
+
 CONFIG_PATH = '/etc/betterdpi-anti-pcdn.json'
 MAX_CONFIG_BYTES = 64 * 1024
 MAX_LIST_ITEMS = 128
@@ -13,8 +15,7 @@ DEFAULTS = {
     'enabled': False, 'mode': 'observe', 'interface': 'br-lan',
     'threshold': 80, 'ban_seconds': 120,
     'allow_devices': [], 'allow_domains': [], 'pcdn_domains': [],
-    'weights': {'fanout': 25, 'serving_peers': 20, 'sustained': 20,
-                'upload_ratio': 15, 'domain': 20},
+    'weights': dict(DEFAULT_WEIGHTS),
 }
 
 

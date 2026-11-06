@@ -462,6 +462,50 @@ function deviceRows(items, page) {
 	}));
 }
 
+function trendCurves(items, step, width, maximum) {
+	function svg(tag, attributes) {
+		var node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+		Object.keys(attributes).forEach(function(key) { node.setAttribute(key, attributes[key]); });
+		return node;
+	}
+	var chart = svg('svg', { 'class': 'ns-trend-curves', viewBox: '0 0 ' + width + ' 190', preserveAspectRatio: 'none', 'aria-hidden': 'true', focusable: 'false' });
+	function draw(points, color) {
+		if (!points.length) return;
+		var slopes = [], tangents = [], n = points.length;
+		for (var i = 0; i < n - 1; i++) slopes.push((points[i+1].y - points[i].y) / (points[i+1].x - points[i].x));
+		// Monotone cubic interpolation passes through the measured values without
+		// inventing peaks or negative traffic between adjacent samples.
+		for (var i = 0; i < n; i++) {
+			var before = slopes[i-1], after = slopes[i];
+			tangents[i] = i === 0 ? (after || 0) : i === n-1 ? (before || 0) : before * after <= 0 ? 0 : 2 * before * after / (before + after);
+		}
+		var path = '', previousPartial = null;
+		function flush() {
+			if (path) chart.appendChild(svg('path', { d: path, fill: 'none', stroke: color, 'stroke-width': '2.3', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'vector-effect': 'non-scaling-stroke', 'stroke-dasharray': previousPartial ? '4 4' : 'none', opacity: previousPartial ? '.65' : '1' }));
+			path = '';
+		}
+		for (var i = 0; i < n-1; i++) {
+			var a = points[i], b = points[i+1], dx = (b.x - a.x) / 3, partial = a.partial || b.partial;
+			if (partial !== previousPartial) { flush(); previousPartial = partial; }
+			if (!path) path = 'M ' + a.x + ' ' + a.y;
+			path += ' C ' + (a.x + dx) + ' ' + (a.y + tangents[i]*dx) + ', ' + (b.x - dx) + ' ' + (b.y - tangents[i+1]*dx) + ', ' + b.x + ' ' + b.y;
+		}
+		flush();
+		if (n === 1) chart.appendChild(svg('circle', { cx: points[0].x, cy: points[0].y, r: '2.5', fill: color, opacity: points[0].partial ? '.65' : '1' }));
+	}
+	['download', 'upload'].forEach(function(direction, directionIndex) {
+		var points = [], prior = null, color = directionIndex ? '#ee7a59' : '#4d9de0';
+		items.forEach(function(item, index) {
+			var value = Number(item[direction] || 0), absent = item.covered === false || item.coverage === 'missing' || !Number.isFinite(value) || value < 0;
+			if (absent || prior != null && Number(item.bucket) - prior !== step) { draw(points, color); points = []; }
+			if (!absent) points.push({ x: (index + .5) * width / items.length, y: 187 - value / maximum * 184, partial: item.coverage === 'partial' });
+			prior = Number(item.bucket);
+		});
+		draw(points, color);
+	});
+	return chart;
+}
+
 function timeline(items, step, selection, clockAnomaly) {
 	items = items || [];
 	if (!items.length) return E('div', { 'class': 'ns-empty' }, _("No trend data"));
@@ -479,8 +523,7 @@ function timeline(items, step, selection, clockAnomaly) {
 	var selectedItem = selection && items.find(function(item) { return item.bucket === selection.bucket; });
 	if (selection && !selectedItem) selection.bucket = null;
 	dom.content(selected, description(selectedItem || items[items.length-1]));
-	// Keep each direction visible at minute resolution instead of compressing
-	// dozens of columns into subpixel widths on a phone. Horizontal position is
+	// Keep minute samples selectable on a phone. Horizontal position is
 	// preserved by the existing dashboard refresh mechanism.
 	var minWidth = Math.max(240, items.length * 12);
 	var labelEvery = Math.max(1, Math.ceil(60 / (minWidth / items.length)));
@@ -488,16 +531,14 @@ function timeline(items, step, selection, clockAnomaly) {
 		E('div', { 'class': 'ns-trend-chart' }, [
 			E('div', { 'class': 'ns-trend-axis', 'aria-hidden': 'true' }, [ E('span', {}, bytes(max)), E('span', {}, bytes(max/2)), E('span', {}, '0 B') ]),
 			E('div', { 'class': 'ns-trend-scroll', 'data-ns-scroll': 'traffic-trend' }, [
-				E('div', { 'class': 'ns-trend-plot', 'style': 'min-width:' + minWidth + 'px' }, items.map(function(item, index) {
+				E('div', { 'class': 'ns-trend-plot', 'style': 'min-width:' + minWidth + 'px' }, [trendCurves(items, step, minWidth, max)].concat(items.map(function(item, index) {
 					var date = new Date(item.bucket * 1000), label = date.getMonth()+1 + '/' + date.getDate() + '\n' + String(date.getHours()).padStart(2,'0') + ':' + String(date.getMinutes()).padStart(2,'0');
 					var showLabel = index % labelEvery === 0 && (index === 0 || items.length - index >= labelEvery);
 					return E('button', { 'type': 'button', 'class': 'ns-trend-group' + (missing(item) ? ' ns-trend-missing' : item.coverage === 'partial' ? ' ns-trend-partial' : ''), 'title': description(item), 'aria-label': description(item), 'click': function() { if (selection) selection.bucket = item.bucket; dom.content(selected, description(item)); } }, [
-						E('span', { 'class': 'ns-trend-bars', 'aria-hidden': 'true' }, missing(item) ? [E('span', { 'class': 'ns-trend-gap' }, '—')] : [
-							E('span', { 'class': 'ns-trend-down', 'style': 'height:' + (Number(item.download || 0) / max * 100) + '%' }),
-							E('span', { 'class': 'ns-trend-up', 'style': 'height:' + (Number(item.upload || 0) / max * 100) + '%' })
-						]), E('small', { 'class': 'ns-trend-label' }, showLabel ? label : '')
+						E('span', { 'class': missing(item) ? 'ns-trend-gap' : 'ns-trend-hit', 'aria-hidden': 'true' }, missing(item) ? '—' : ''),
+						E('small', { 'class': 'ns-trend-label' }, showLabel ? label : '')
 					]);
-				}))
+				})))
 			])
 		]), selected
 	]);
@@ -695,7 +736,7 @@ return view.extend({
 			else if ((data.timeline || []).some(function(item) { return item.covered === false || item.coverage === 'missing' || item.coverage === 'partial'; }))
 				notices.push(E('p', { 'class': 'ns-range ns-minute-coverage' }, _("Some minutes have incomplete collection. Gaps are unknown traffic, not zero.")));
 		} else if (data.trend_fallback === 'filtered') {
-			notices.push(E('p', { 'class': 'ns-range ns-trend-fallback' }, _("Application and traffic filters use hourly bars for the selected time range.")));
+			notices.push(E('p', { 'class': 'ns-range ns-trend-fallback' }, _("Application and traffic filters use hourly curves for the selected time range.")));
 		}
 		return E('section', { 'class': 'ns-section ns-trend-section' }, [
 			E('div', { 'class': 'ns-section-head ns-trend-heading' }, [
@@ -907,12 +948,10 @@ return view.extend({
 .ns-root .ns-trend-plot { position:relative; display:flex; width:100%; height:220px; gap:0; background:repeating-linear-gradient(to top,transparent 0,transparent calc(50% - 1px),rgba(127,127,127,.18) calc(50% - 1px),rgba(127,127,127,.18) 50%); background-size:100% 190px; background-repeat:no-repeat; }
 .ns-root button.ns-trend-group { position:relative; display:block!important; flex:1; min-width:12px!important; width:auto!important; height:190px!important; min-height:0!important; padding:0 1px!important; margin:0!important; border:0!important; border-radius:0!important; background:transparent!important; color:inherit!important; box-shadow:none!important; cursor:pointer; overflow:visible!important; }
 .ns-root button.ns-trend-group:focus-visible { outline:2px solid #4d9de0!important; }
-.ns-root .ns-trend-bars { height:100%; display:flex; align-items:flex-end; gap:1px; padding-top:2px; }
-.ns-root .ns-trend-down,.ns-root .ns-trend-up { display:block; flex:1; min-height:0; border-radius:2px 2px 0 0; }
-.ns-root .ns-trend-down { background:#4d9de0; }
-.ns-root .ns-trend-up { background:#ee7a59; }
-.ns-root .ns-trend-partial .ns-trend-bars { opacity:.65; }
-.ns-root .ns-trend-gap { display:block; width:100%; text-align:center; font-size:11px; opacity:.65; }
+.ns-root .ns-trend-curves { position:absolute; top:0; left:0; width:100%; height:190px; overflow:visible; pointer-events:none; }
+.ns-root .ns-trend-hit { position:absolute; left:50%; top:0; height:100%; border-left:1px dashed currentColor; opacity:0; }
+.ns-root .ns-trend-group:hover .ns-trend-hit,.ns-root .ns-trend-group:focus-visible .ns-trend-hit { opacity:.3; }
+.ns-root .ns-trend-gap { position:absolute; bottom:0; left:0; display:block; width:100%; text-align:center; font-size:11px; opacity:.65; }
 .ns-root .ns-trend-label { position:absolute; top:100%; left:0; width:58px; text-align:left; font-size:9px; line-height:1.2; white-space:pre-line; padding-top:6px; }
 .ns-root .ns-trend-selection { min-height:3em; overflow-wrap:anywhere; }
 .ns-root *, .ns-root *:before, .ns-root *:after { box-sizing:border-box; }

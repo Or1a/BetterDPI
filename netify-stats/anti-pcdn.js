@@ -23,6 +23,8 @@ function terms(value) { return text(value).split(/[\s,]+/).filter(Boolean); }
 function reasonName(code) {
 	var names = {
 		fanout: _('Peer diversity'), serving_peers: _('Peers receiving uploads'),
+		upload_diversity: _('Multiple upload-dominant peers'), active_distribution: _('Repeated upload progress'),
+		historical_peers: _('Upload distribution across rotating peers'), historical_distribution: _('Repeated cross-port distribution'),
 		sustained: _('Sustained uploads'), upload_ratio: _('Upload ratio'), domain: _('Uploader domain hint')
 	};
 	return names[code] || text(code);
@@ -42,6 +44,7 @@ function guardName(code) {
 function diagnosticName(code) {
 	var names = {
 		flow_identities: _('Connection identities'), active_groups: _('Full observation windows'),
+		closed_cursors: _('Completed connection replay guards'),
 		samples: _('Time buckets'), ignored_identities: _('Excluded identities'), recovery_requests: _('Metadata recovery requests'),
 		flow_capacity: _('Connection identity limit'), group_capacity: _('Full-window limit'),
 		device_group_capacity: _('Per-device full-window limit'), group_flow_capacity: _('Connections per group limit'),
@@ -49,6 +52,11 @@ function diagnosticName(code) {
 		sample_drops: _('Sample storage limit'), missing_metadata: _('Missing connection metadata'),
 		metadata_recovered: _('Metadata baselines recovered'), metadata_resolved: _('Missing identities resolved'),
 		accepted_events: _('Accepted traffic increments'), delayed_events: _('Late or overlong reports'),
+		zero_delta_events: _('Zero-byte reports ignored'), expired_delta_events: _('Reports outside the observation window'),
+		duplicate_missing_events: _('Repeated unresolved reports'), closed_identities_compacted: _('Completed identities compacted'),
+		excluded_identities_released: _('Completed excluded identities released'), closed_cursor_capacity: _('Completed replay guard limit'),
+		closed_cursor_conflicts: _('Completed connection counter conflicts'), closed_metadata: _('Repeated completed metadata'),
+		incarnations_retained: _('Previous connection evidence retained'),
 		global: _('All devices'), group: _('One connection group'), unresolved: _('Identity not yet known')
 	};
 	return names[code] || text(code);
@@ -116,6 +124,7 @@ return view.extend({
 		this.leasesPanel = E('div', {class: 'ap-table-scroll', tabindex: '0', 'aria-label': _('Temporary connection rules')});
 		this.diagnosticsPanel = E('div');
 		this.devicesPanel = E('div', {class: 'ap-table-scroll', tabindex: '0', 'aria-label': _('Cross-port device observations')});
+		this.observationsPanel = E('div', {class: 'ap-table-scroll', tabindex: '0', 'aria-label': _('Shadow decision history')});
 		this.saveButton = E('button', {class: 'cbi-button cbi-button-apply', click: this.save.bind(this)}, _('Save Anti-PCDN settings'));
 		this.settingsLoaded = settingsAvailable(this.data);
 		this.formPanel = E('div', {}, this.settingsForm(object(this.data.settings)));
@@ -166,6 +175,10 @@ return view.extend({
 			E('section', {class: 'ap-card'}, [E('h3', {}, _('Cross-port device observations')),
 				E('p', {}, _('Device scores combine observations across local ports. They do not authorize blocking; individual connections still require complete evidence and all enforcement checks.')), this.devicesPanel]),
 			E('section', {class: 'ap-card'}, [E('h3', {}, _('Scored connections')), this.rowsPanel]),
+			E('section', {class: 'ap-card'}, [E('h3', {}, _('Shadow decision history')),
+				E('p', {}, _('Observation records never install rules. Protected VPN, proxy and allowlisted connections are excluded.')),
+				E('p', {}, _('A simulated block is a scoring proposal; firewall enforcement has not been checked. Other records show why a connection was not eligible.')),
+				this.observationsPanel]),
 			E('section', {class: 'ap-card'}, [E('h3', {}, _('Temporary connection rules')),
 				E('p', {}, _('Installed rules are not proof that traffic was successfully blocked. Observed bytes are DPI observations, not blocked bytes.')), this.leasesPanel]),
 			E('section', {class: 'ap-card'}, [E('h3', {}, _('Coverage and recent actions')), this.diagnosticsPanel])
@@ -199,7 +212,8 @@ return view.extend({
 		var defaults = [25, 20, 20, 15, 20];
 		weights.forEach(function(key, index) {
 			input['weight_' + key] = integerInput(object(settings.weights)[key] == null ? defaults[index] : settings.weights[key], 0, 40);
-			fields.push(field(reasonName(key), input['weight_' + key]));
+			fields.push(field(reasonName(key), input['weight_' + key], key === 'fanout'
+				? _('Unique peers in 60 seconds: 20 can add up to 25 points, 40 up to 35, and 80 up to 40. This weight caps the contribution.') : null));
 		});
 		fields.push(E('p', {}, _('Each score weight is 0–40; all five weights must total 100. The maximum score is 100.')));
 		return E('div', {class: 'cbi-section ap-settings'}, fields.slice(0, 5).concat([
@@ -295,6 +309,17 @@ return view.extend({
 		});
 		if (available && data.release_pending) messages.push(E('p', {}, _('A release request is pending.')));
 		var coverage = object(runtime.coverage);
+		var fastPath = object(runtime.fast_path);
+		var readiness = object(runtime.execution_readiness);
+		if (available && data.stale === false && settings.enabled === true && readiness.supported === false)
+			messages.push(E('p', {class: 'alert-message warning'}, _('This forwarding path cannot currently enforce automatic blocks. Scoring and observation continue.') + ' ' + text(readiness.reason)));
+		if (runtime.fast_path && available && data.stale === false) {
+			messages.push(E('p', {}, _('Fast detection combines ports and checks new bytes every second. Bursts need 8 uploading peers; rotating uploads need 4 peers across 3 networks and 2 MiB of distributed evidence. A 30-minute lookback does not require waiting 30 minutes.')));
+			messages.push(E('p', {}, _('History alone cannot trigger a decision: new peers need 512 KiB of current upload, returning qualified peers need 32 KiB, with repeated upload progress. VPN and allowlist protections take priority.')));
+			messages.push(E('p', {}, _('Fast peer diversity counts IPv4 addresses and IPv6 /64 prefixes; multiple addresses do not prove multiple machines.')));
+			if (fastPath.error) messages.push(E('p', {class: 'alert-message warning'}, _('Fast detection unavailable:') + ' ' + text(fastPath.error)));
+			if (object(fastPath.history).error || fastPath.checkpoint_error) messages.push(E('p', {class: 'alert-message warning'}, _('Distribution history unavailable:') + ' ' + text(object(fastPath.history).error || fastPath.checkpoint_error)));
+		}
 		if (available && data.stale === false && settings.enabled === true &&
 			(Number(coverage.global_wait_seconds) > 0 || Number(coverage.unresolved_metadata) > 0))
 			messages.push(E('p', {class: 'alert-message warning'}, _('Observation coverage is incomplete. Low scores do not rule out suspicious traffic.')));
@@ -322,7 +347,8 @@ return view.extend({
 			if (row.threshold_met) decision += '; ' + (guards ? _('Action guarded') : runtime.mode === 'observe' ? _('Observation only') : _('Awaiting enforcement checks'));
 			return E('tr', {class: 'tr'}, [
 				E('td', {class: 'td'}, [E('div', {}, text(row.mac)), E('div', {}, tuple(row)), E('div', {}, text(row.host))]),
-				E('td', {class: 'td'}, [E('strong', {}, text(row.score) + '/100'), E('div', {}, reasons)]),
+				E('td', {class: 'td'}, [E('strong', {}, text(row.score) + '/100'), E('div', {}, reasons),
+					E('div', {}, row.evidence_source === 'conntrack_fast' ? _('Fast distribution evidence') : '')]),
 				E('td', {class: 'td'}, [E('div', {}, _('Upload:') + ' ' + bytes(row.upload)), E('div', {}, _('Download:') + ' ' + bytes(row.download))]),
 				E('td', {class: 'td'}, [E('div', {}, decision), E('div', {}, guards),
 					Number(row.wait_seconds) > 0 ? E('div', {}, _('Window wait:') + ' ' + Math.ceil(row.wait_seconds) + ' ' + _('seconds remaining')) : '',
@@ -330,6 +356,36 @@ return view.extend({
 			]);
 		});
 		dom.content(this.rowsPanel, table([_('Device and connection'), _('Score and evidence'), _('Observed bytes'), _('Decision and guards')], rows));
+		var journal = object(runtime.observations), history = [];
+		if (journal.error) history.push(E('p', {class: 'alert-message warning'}, _('Observation recording failed:') + ' ' + text(journal.error)));
+		if (runtime.observations) {
+			history.push(E('p', {}, _('Records written in this session:') + ' ' + text(journal.written)));
+			history.push(E('p', {}, _('Local rotating history, up to 8 MiB. Collector restarts keep the files; router reboots clear them. The latest 20 records from this session are shown.')));
+			history.push(E('p', {}, _('Groups with at least 40 peers are also recorded without material upload. These watch-only samples cannot qualify for a simulated block.')));
+			history.push(E('p', {}, _('Records waiting to be written:') + ' ' + text(journal.pending || 0) + ' · ' + _('Records lost to recording limits:') + ' ' + text(journal.dropped || 0)));
+		}
+		history.push(table([_('Recorded at'), _('Device and connection'), _('Score and evidence'), _('Shadow decision')], list(journal.recent).slice(-20).reverse().map(function(record) {
+			var metrics = object(record.metrics);
+			var outcome = {would_block: _('Simulated block; not executed'), evidence_incomplete: _('Threshold reached; evidence incomplete'), below_threshold: _('Below threshold')}[record.outcome] || _('Decision unavailable');
+			return E('tr', {class: 'tr'}, [
+				E('td', {class: 'td'}, new Date(Number(record.timestamp) * 1000).toLocaleString()),
+				E('td', {class: 'td'}, [E('div', {}, text(record.mac)), E('div', {}, tuple(record)), E('div', {}, text(record.host))]),
+				E('td', {class: 'td'}, [E('div', {}, text(record.score) + '/100 · ' + _('Score threshold (1–100)') + ': ' + text(record.threshold)),
+					E('div', {}, list(record.reasons).map(function(reason) { return reasonName(reason.id) + ': +' + text(reason.points); }).join(', ')),
+					E('div', {}, _('Upload:') + ' ' + bytes(metrics.upload) + ' · ' + _('Download:') + ' ' + bytes(metrics.download)),
+					E('div', {}, _('Peers:') + ' ' + text(metrics.peers))]),
+				E('td', {class: 'td'}, [E('div', {}, outcome),
+					object(object(record.coverage).execution_readiness).supported === false ? E('div', {}, _('Platform precheck failed; this score is not an executable block.')) : '',
+					E('div', {}, record.sample_type === 'fanout_watch' ? _('High peer count; observation only') : ''),
+					record.evidence_source === 'conntrack_fast' ? E('div', {}, _('Fast distribution evidence') + ' · ' +
+						_('Seconds observed:') + ' ' + text(record.observed_seconds) + ' · ' +
+						_('Connection upload at trigger:') + ' ' + bytes(record.connection_upload_bytes)) : '',
+						record.aggregation === 'cross_port' ? E('div', {}, _('Cross-port uploading peers:') + ' ' + text(object(record.history_metrics).serving_peers) + ' · ' +
+							_('Distributed upload evidence:') + ' ' + bytes(object(record.history_metrics).distributed_upload)) : '',
+					E('div', {}, list(record.guards).map(guardName).join(', '))])
+			]);
+		})));
+		dom.content(this.observationsPanel, history);
 		var leaseRows = list(runtime.leases).slice(0, 64).map(function(lease) {
 			lease = object(lease);
 			var button = E('button', {class: 'cbi-button cbi-button-reset', click: this.release.bind(this, lease.id)}, _('Release rule'));
@@ -346,6 +402,12 @@ return view.extend({
 		dom.content(this.leasesPanel, table([_('Device and connection'), _('Rule state'), _('Time remaining'), _('Action')], leaseRows));
 		var diagnostics = [];
 		if (runtime.timestamp) diagnostics.push(E('p', {}, _('Last runtime update:') + ' ' + new Date(Number(runtime.timestamp) * 1000).toLocaleString()));
+		if (runtime.fast_path) diagnostics.push(E('p', {}, _('Fast counter coverage:') + ' ' + text(fastPath.matched) + ' · ' +
+			_('Connections without matching DPI identity:') + ' ' + text(fastPath.unattributed)));
+		if (fastPath.history) diagnostics.push(E('p', {}, _('Cross-port history:') + ' ' + text(fastPath.history.peers) + ' ' + _('Peers:') + ' · ' +
+			_('Qualified distribution groups:') + ' ' + text(fastPath.history.qualified_cohorts)));
+		if (runtime.fast_path) diagnostics.push(E('p', {}, _('Counter sample time:') + ' ' + text(fastPath.last_read_ms) + ' ms · ' +
+			_('Failed reads:') + ' ' + text(object(fastPath.counters).read_failures || 0) + ' · ' + _('Recovered reads:') + ' ' + text(object(fastPath.counters).recovered_reads || 0)));
 		if (runtime.coverage) {
 			diagnostics.push(E('p', {}, _('Unresolved connection metadata:') + ' ' + text(coverage.unresolved_metadata)));
 			diagnostics.push(E('p', {}, _('Global window wait:') + ' ' + text(coverage.global_wait_seconds) + ' ' + _('seconds remaining')));
