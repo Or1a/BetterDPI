@@ -15,10 +15,10 @@ if os.path.isdir(source_features):
     sys.path.insert(0, source_features)
 from anti_pcdn.config import CONFIG_PATH, DEFAULTS, MAX_CONFIG_BYTES, load, save
 
-RUNTIME_DIR = '/var/run/betterdpi-anti-pcdn'
+RUNTIME_DIR = '/tmp/betterdpi-anti-pcdn'
 STATUS_PATH = RUNTIME_DIR + '/status.json'
 RELEASE_PATH = RUNTIME_DIR + '/release.json'
-COLLECTOR_STATUS_PATH = '/var/run/netify-stats/status.json'
+COLLECTOR_STATUS_PATH = '/tmp/netify-stats/status.json'
 MAX_STATUS_BYTES = 256 * 1024
 STALE_SECONDS = 15
 METHODS = {'status': {}, 'configure': {'settings': {}}, 'release': {'id': ''}}

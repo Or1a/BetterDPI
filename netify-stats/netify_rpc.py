@@ -20,7 +20,7 @@ VERSION = "0.4.2"
 
 
 DB_PATH = "/tmp/netify-stats/stats.db"
-COLLECTOR_STATUS = "/var/run/netify-stats/status.json"
+COLLECTOR_STATUS = "/tmp/netify-stats/status.json"
 NETIFY_STATUS = "/var/run/netifyd/status.json"
 
 

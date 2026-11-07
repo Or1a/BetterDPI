@@ -19,7 +19,7 @@ PY
 	ns_status=$?
 	[ "$ns_status" -eq 3 ] && return 0
 	[ "$ns_status" -eq 0 ] || return "$ns_status"
-	mkdir -p "$ns_root/tmp/netify-stats" "$ns_root/var/run/netify-stats" || return 1
+	mkdir -p "$ns_root/tmp/netify-stats" || return 1
 	procd_open_instance
 	procd_set_param command "$ns_root/usr/bin/python3" "$ns_root/usr/sbin/netify-stats-collector"
 	procd_set_param respawn 3600 5 0

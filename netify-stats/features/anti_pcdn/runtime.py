@@ -56,7 +56,7 @@ def project(message, interface):
 
 
 class Worker(threading.Thread):
-    def __init__(self, settings, router_macs=(), runtime_dir='/var/run/betterdpi-anti-pcdn',
+    def __init__(self, settings, router_macs=(), runtime_dir='/tmp/betterdpi-anti-pcdn',
                  engine=None, firewall=None, clock=time.monotonic, wall=time.time):
         super().__init__(name='betterdpi-anti-pcdn', daemon=True)
         self.settings = settings

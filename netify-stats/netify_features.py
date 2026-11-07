@@ -11,7 +11,7 @@ if os.path.isdir(_source_features):
 
 class FeatureBridge:
     def __init__(self, router_macs=(), config_path='/etc/betterdpi-anti-pcdn.json',
-                 runtime_dir='/var/run/betterdpi-anti-pcdn', factory=None):
+                 runtime_dir='/tmp/betterdpi-anti-pcdn', factory=None):
         self.router_macs = tuple(router_macs)
         self.config_path = config_path
         self.runtime_dir = runtime_dir

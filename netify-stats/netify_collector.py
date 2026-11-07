@@ -23,7 +23,7 @@ from netify_minute import MinuteSeries, RETENTION_MINUTES
 SOCKET_PATH = "/var/run/netifyd/netifyd.sock"
 DATA_DIR = "/tmp/netify-stats"
 DB_PATH = os.path.join(DATA_DIR, "stats.db")
-RUNTIME_DIR = "/var/run/netify-stats"
+RUNTIME_DIR = DATA_DIR
 STATUS_PATH = os.path.join(RUNTIME_DIR, "status.json")
 EXPORT_PATH = '/var/run/netifyd/sink-request.json'
 PENDING_LIMIT = 4096
