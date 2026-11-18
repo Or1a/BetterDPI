@@ -97,6 +97,48 @@ class WanTest(unittest.TestCase):
         self.meter.add_stats(self.event(up=1,down=2,total=3,last_seen_at=400000),3601)
         self.assertEqual(self.db.execute("SELECT protocol FROM wan_hourly WHERE category='unattributed'").fetchone()[0],'UDP')
 
+    def test_explicit_mesh_vpn_protocols_are_tunnels_without_socket_ownership(self):
+        for label in ('Tailscale', ' ZeroTier ', 'UDP', 'Tailscale-like'):
+            self.meter.update_metadata(self.metadata(label, detected_protocol_name=label))
+            self.meter.add_stats(self.event(digest=label), 3600)
+        rows = dict(self.db.execute('SELECT protocol,category FROM wan_hourly'))
+        self.assertEqual(rows, {'Tailscale': 'tunnel', ' ZeroTier ': 'tunnel',
+                                'UDP': 'unattributed', 'Tailscale-like': 'unattributed'})
+
+    def test_old_and_new_tunnel_evidence_share_totals_and_endpoint_ranking(self):
+        def hourly(bucket, category, evidence, protocol, up):
+            self.db.execute('INSERT INTO wan_hourly VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+                            (bucket, 'wan', category, evidence, '', '192.0.2.1', protocol,
+                             up, 2 * up, 1, bucket))
+
+        hourly(3600, 'unattributed', 'ownership_unconfirmed', 'Tailscale', 80)
+        hourly(7200, 'tunnel', 'observed_vpn_protocol', 'Tailscale', 40)
+        hourly(7200, 'unattributed', 'direction_unconfirmed', 'Tailscale', 6)
+        hourly(7200, 'unattributed', 'ownership_unconfirmed', 'UDP', 90)
+        self.db.execute('INSERT INTO wan_archive VALUES (?,?,?,?,?,?,?,?,?,?)',
+                        ('wan', 'unattributed', 'ownership_unconfirmed', '', 'ZeroTier',
+                         50, 100, 1, 0, 0))
+        self.db.commit()
+        self.db.execute('PRAGMA query_only=ON')
+
+        recent = query_wan(self.db, 3600, 7200, 7200)[0]
+        self.assertEqual(recent['categories']['tunnel'], {'upload': 120, 'download': 240})
+        self.assertEqual(recent['categories']['unattributed'], {'upload': 96, 'download': 192})
+        self.assertEqual(recent['direction_unconfirmed_bytes'], 18)
+        self.assertEqual((recent['upload'], recent['download'], recent['events']), (216, 432, 4))
+        self.assertEqual([(r['upload'], r['evidence']) for r in recent['details']],
+                         [(120, 'observed_vpn_protocol'), (90, 'ownership_unconfirmed'),
+                          (6, 'direction_unconfirmed')])
+        self.assertEqual([hour['upload'] for hour in recent['hours']], [80, 136])
+        self.assertIs(recent['archived'], False)
+
+        all_time = query_wan(self.db, 0, None, 7200)[0]
+        self.assertEqual(all_time['categories']['tunnel'], {'upload': 170, 'download': 340})
+        self.assertEqual((all_time['upload'], all_time['download'], all_time['events']), (266, 532, 5))
+        archived = [r for r in all_time['details'] if r['archived']]
+        self.assertEqual([(r['category'], r['protocol'], r['peer']) for r in archived],
+                         [('tunnel', 'ZeroTier', '')])
+
     def test_exact_socket_owner_and_conntrack_classification(self):
         output = '''tcp 0 0 0.0.0.0:7892 0.0.0.0:* LISTEN 12/mihomo
  tcp 0 0 203.0.113.1:40000 192.0.2.1:443 ESTABLISHED 12/mihomo

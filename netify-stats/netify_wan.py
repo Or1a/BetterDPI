@@ -2,9 +2,10 @@
 from collections import OrderedDict
 import ipaddress
 import hashlib
+import string
 import time
 
-from netify_classify import PROTOCOL_LOOKUP
+from netify_classify import PROTOCOL_ALIASES, PROTOCOL_LOOKUP
 
 CATEGORIES = ('forwarded', 'proxy', 'tunnel', 'router', 'unattributed')
 PROXY_PROCESSES = frozenset(('clash', 'mihomo', 'sing-box', 'xray', 'v2ray',
@@ -244,8 +245,32 @@ def query_wan(db, start, end, now):
     if end is not None:
         where += ' AND bucket<=?'
         args.append(end)
+    ledger = f'''SELECT interface,category,evidence,device,peer,protocol,upload,download,events,0 AS archived
+                 FROM wan_hourly WHERE {where}'''
+    if start == 0 and end is None:
+        ledger += """ UNION ALL
+            SELECT interface,category,evidence,device,'',protocol,upload,download,events,1 FROM wan_archive"""
+    # Older collectors kept the raw protocol even when ownership was unknown.
+    # Apply the current protocol mapping before grouping, so an endpoint split
+    # across versions gets one rank without rewriting hourly or archived data.
+    aliases = PROTOCOL_ALIASES['vpn']
+    placeholders = ','.join('?' for _ in aliases)
+    reports = db.execute(f'''
+        WITH ledger AS ({ledger}), labelled AS (
+            SELECT *, CASE WHEN evidence NOT IN ('missing_metadata','direction_unconfirmed','observed_vpn_protocol')
+                                AND lower(trim(protocol, ?)) IN ({placeholders})
+                           THEN 'observed_vpn_protocol' ELSE evidence END AS report_evidence
+            FROM ledger
+        )
+        SELECT interface, CASE WHEN report_evidence='observed_vpn_protocol' THEN 'tunnel'
+                               ELSE category END AS report_category,
+               report_evidence,device,peer,protocol,SUM(upload),SUM(download),SUM(events),archived
+        FROM labelled
+        GROUP BY interface,report_category,report_evidence,device,peer,protocol,archived''',
+        (*args, string.whitespace, *aliases))
     result = {}
-    def add(interface,category,evidence,device,peer,protocol,up,down,events,archived=False):
+    for interface, category, evidence, device, peer, protocol, up, down, events, archived in reports:
+        archived = bool(archived)
         item = result.setdefault(interface, dict(name=interface,upload=0,download=0,events=0,
             categories={key:dict(upload=0,download=0) for key in CATEGORIES}, details=[], archived=False,
             direction_unconfirmed_bytes=0))
@@ -263,13 +288,6 @@ def query_wan(db, start, end, now):
         # Keep only the top 10 evidence samples, not a full Python endpoint map.
         item['details'].sort(key=lambda r:(-r['upload']-r['download'],r['peer'],r['category']))
         del item['details'][10:]
-    for row in db.execute('''SELECT interface,category,evidence,device,peer,protocol,
-        SUM(upload),SUM(download),SUM(events) FROM wan_hourly WHERE '''+where+
-        ' GROUP BY interface,category,evidence,device,peer,protocol', args):
-        add(*row)
-    if start == 0 and end is None:
-        for row in db.execute("SELECT interface,category,evidence,device,'',protocol,upload,download,events FROM wan_archive"):
-            add(*row,archived=True)
     for item in result.values():
         # Hourly evidence is useful for locating short bursts; archived history
         # is intentionally excluded because no dates can be reconstructed.

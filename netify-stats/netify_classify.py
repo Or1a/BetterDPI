@@ -31,7 +31,7 @@ PROTOCOL_ALIASES = {
     'stun': ('stun',),
     'bittorrent': ('bittorrent', 'bittorrent dht', 'bittorrent_dht'),
     'ssh': ('ssh',),
-    'vpn': ('openvpn', 'wireguard', 'ipsec', 'ipsec ike', 'ipsec esp',
+    'vpn': ('openvpn', 'wireguard', 'tailscale', 'zerotier', 'ipsec', 'ipsec ike', 'ipsec esp',
             'ipsec ah', 'ike', 'ikev1', 'ikev2', 'esp', 'pptp', 'l2tp', 'sstp'),
     'tcp': ('tcp',),
     'udp': ('udp',),
