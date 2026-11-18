@@ -81,6 +81,7 @@ netify_minute.py
 test_minutes.py
 test_minute_query.py
 features/anti_pcdn/observation.py
+features/anti_pcdn/audit.py
 test_anti_pcdn_observation.py
 features/anti_pcdn/fast.py
 test_anti_pcdn_fast.py

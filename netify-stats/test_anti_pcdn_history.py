@@ -147,6 +147,31 @@ class CrossPortTests(unittest.TestCase):
         self.assertFalse(scenario.observer.candidates(215.1, scenario.metadata))
         self.assertFalse(scenario.observer.history.summaries(215)[row['cohort']]['ready'])
 
+    def test_lease_keeps_verified_history_but_late_vpn_revokes_it(self):
+        scenario, rows = self.serial()
+        held = rows[0]
+        cohort = held['cohort']
+        original = scenario.observer.history.summaries(212)[cohort]['upload']
+        scenario.observer.suppress(held, 260)
+        scenario.metadata[-1]['guards'] = ['suppressed']
+        scenario.records[-1]['upload'] += 8*MIB  # Blocked retries are not evidence.
+        returning = scenario.metadata[0]
+        returning.update(closed=False, id='returning-flow', birth=returning['birth']+1,
+                         sport=53000, dport=55000)
+        scenario.records[0].update(id=999, tuple=ct.flow_tuple(returning), upload=0, download=0)
+        self.assertFalse(scenario.poll(213))
+        learned = scenario.observer.history.summaries(213)[cohort]
+        self.assertEqual(learned['upload'], original)
+        self.assertTrue(learned['ready'])
+        for now in (214, 215):
+            scenario.records[0]['upload'] += 16*KIB
+            rows = scenario.poll(now)
+        self.assertEqual([row['id'] for row in rows], [returning['id']])
+        self.assertEqual(rows[0]['detection_path'], 'returning_peer')
+        scenario.metadata[-1]['guards'].append('protected_transport')
+        self.assertFalse(scenario.observer.candidates(215.1, scenario.metadata))
+        self.assertFalse(scenario.observer.history.summaries(215)[cohort]['ready'])
+
     def test_new_classification_revokes_generic_history_and_rebaselines(self):
         scenario, rows = self.serial()
         self.assertTrue(rows)

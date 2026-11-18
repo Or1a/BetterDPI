@@ -11,7 +11,9 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "features"))
 from anti_pcdn import conntrack as ct
-from anti_pcdn.firewall import Firewall, FirewallError, OWNER, TABLE, capability, has_element, owned_table, run_bounded
+from anti_pcdn.firewall import (DROPPED_DOWNLOAD, DROPPED_UPLOAD, Firewall, FirewallError,
+                               OWNER, SCOPED_FORWARD_PRIORITY, TABLE, capability, has_element,
+                               owned_table, run_bounded)
 
 
 ROW = {"id": "a" * 32, "mac": "02:00:00:00:00:01", "ip": "192.168.1.2", "peer": "8.8.8.8",
@@ -43,10 +45,18 @@ class FakeNft:
         self.elements = {}
         self.bad_readback = False
         self.bad_delete = False
+        self.route = [{"dev": "wan"}]
+        self.drop_counters = {DROPPED_UPLOAD: (0, 0), DROPPED_DOWNLOAD: (0, 0)}
 
     def __call__(self, args, data=None):
         self.calls.append((args, data))
+        if args[0] == "ip":
+            return json.dumps(self.route)
         if "-j" in args:
+            if "counters" in args:
+                return json.dumps({"nftables": [{"counter": {"family": "inet", "table": TABLE,
+                    "name": name, "comment": OWNER, "packets": packets, "bytes": size}}
+                    for name, (packets, size) in self.drop_counters.items()]})
             if "map" in args:
                 entries = [[{"elem": {"val": identifier, "expires": 29, "timeout": 30}}, {"jump": {"target": name}}]
                            for identifier, name in self.elements.items()]
@@ -57,8 +67,12 @@ class FakeNft:
         if "-c" in args:
             return ""
         if data.startswith("add table"):
-            self.document = document(True)
+            self.document["nftables"].append({"table": {"family": "inet", "name": TABLE, "comment": OWNER}})
         for line in data.splitlines():
+            if line.startswith("add counter"):
+                self.drop_counters[line.split()[4]] = (0, 0)
+            if line.startswith("delete counter"):
+                self.drop_counters.pop(line.split()[4], None)
             if line.startswith("add element"):
                 identifier = int(line.split("{ ", 1)[1].split()[0])
                 name = line.split("jump ", 1)[1].split()[0]
@@ -212,6 +226,96 @@ class FirewallTests(unittest.TestCase):
                 capability(document(), modules)
         with self.assertRaises(FirewallError):
             capability({"nftables": []}, "")
+
+    def enable_scoped_forwarding(self):
+        self.nft.document["nftables"].extend([
+            {"rule": {"expr": [{"tproxy": {"port": 123}}]}},
+            {"rule": {"family": "inet", "table": "fw4", "chain": "accept_to_wan", "expr": [
+                {"match": {"op": "in", "left": {"meta": {"key": "oifname"}},
+                           "right": {"set": ["wan", "test-tun"]}}}, {"accept": None}]}},
+        ])
+        self.firewall.resolve_wan = lambda name: 7 if name == "wan" else None
+        self.firewall.ip = "ip"
+        self.firewall.modules = lambda: "nft_tproxy 0 0\nnf_tproxy_ipv4 0 0\n"
+
+    def test_proxy_coexistence_uses_only_the_verified_wan_route(self):
+        self.enable_scoped_forwarding()
+        self.assertEqual(self.firewall.inspect(100)["scope"], "direct_wan")
+        self.assertEqual(self.install()["ct_id"], 123)
+        writes = "\n".join(data for args, data in self.nft.calls if data)
+        self.assertIn("priority %d" % SCOPED_FORWARD_PRIORITY, writes)
+        self.assertIn('meta iifname "br-lan" meta oif 7 meta ipsec missing rt ipsec missing', writes)
+        self.assertIn('meta oifname "br-lan" meta iif 7 meta ipsec missing rt ipsec missing', writes)
+        self.assertIn('meta mark 0 ct mark 0 counter name dropped_upload drop', writes)
+
+    def test_drop_totals_survive_rule_expiry_and_owned_table_cleanup(self):
+        lease = self.install()
+        self.nft.drop_counters[DROPPED_UPLOAD] = (7, 4600)
+        self.nft.drop_counters[DROPPED_DOWNLOAD] = (2, 380)
+        self.firewall.sample_drops()
+        self.firewall.expire(134)
+        self.nft.drop_counters[DROPPED_UPLOAD] = (8, 5000)
+        self.assertTrue(self.firewall.clear())
+        self.assertEqual(self.firewall.drop_status()["upload"], {"packets": 8, "bytes": 5000})
+        self.assertEqual(self.firewall.drop_status()["download"], {"packets": 2, "bytes": 380})
+        self.assertFalse(self.firewall.leases)
+
+    def test_auto_counters_survive_immediate_release_and_are_not_reused(self):
+        self.firewall.audit = mock.Mock(return_value=True)
+        self.firewall.wall = lambda: self.wall
+        self.wall = 1000
+        lease = self.install()
+        previous = lease['chain']
+        self.firewall.sample_drops()
+        self.nft.drop_counters[previous + '_up'] = (1, 700)
+        self.wall = 1001
+        self.assertTrue(self.firewall.release(lease['id'], 104, 'pending_observations'))
+        self.assertFalse(self.nft.elements)
+        self.assertEqual(self.nft.drop_counters[previous + '_up'], (1, 700))
+        self.firewall.expire(105)
+        self.assertNotIn(previous + '_up', self.nft.drop_counters)
+        calls = self.firewall.audit.call_args_list
+        self.assertEqual([c.args[0] for c in calls], ['lease_installed', 'lease_retired', 'first_drop', 'lease_closed'])
+        self.assertEqual(calls[1].kwargs['reason'], 'pending_observations')
+        self.assertEqual(calls[2].kwargs, dict(direction='upload', packets=1, bytes=700, not_before=1000))
+        self.assertEqual(calls[3].kwargs['counts']['download']['packets'], 0)
+        self.assertTrue(calls[3].kwargs['complete'])
+        row = dict(ROW, last_observed=106, prior_upload_observed=105, ct_id=123, evidence_source='conntrack_fast')
+        self.assertNotEqual(self.firewall.install(row, 30, 106)['chain'], previous)
+
+    def test_exact_kernel_byte_totals_do_not_change_identity_validation(self):
+        identity = ct.flow_tuple(ROW)
+        accounting = (ct.attribute(0x8009, ct.attribute(2, struct.pack('!Q', 700)))
+                      + ct.attribute(0x800a, ct.attribute(2, struct.pack('!Q', 120))))
+        with mock.patch.object(ct, 'query', return_value=conntrack_payload(identity) + accounting):
+            self.assertEqual(ct.lookup(ROW)['upload_bytes'], 700)
+        with mock.patch.object(ct, 'query', return_value=conntrack_payload(ct.reverse(identity)) + accounting):
+            self.assertEqual(ct.lookup(ROW)['upload_bytes'], 120)
+
+    def test_auto_cleanup_batches_fit_nft_input_budget(self):
+        fw = self.firewall
+        fw.audit = mock.Mock(return_value=True)
+        self.install()
+        for number in range(1, 24):
+            name = 'lease_%024x' % number
+            fw.retired[name] = dict(id=str(number), chain=name, detached=False, retired_reason='ttl_expired',
+                                    drop_final=True, drop_last={})
+        fw.expire(135)
+        fw.expire(141)
+        self.assertFalse(fw.retired)
+        batches = [data for _, data in self.nft.calls if data and data.startswith('delete chain')]
+        self.assertEqual(len(batches), 2)
+        self.assertTrue(all(len(data.encode()) <= 4096 for data in batches))
+
+    def test_proxy_coexistence_rejects_tunnel_route_and_later_mark_hook(self):
+        self.enable_scoped_forwarding()
+        self.nft.route = [{"dev": "test-tun"}]
+        self.assertIsNone(self.firewall.install(ROW, 30, 100))
+        self.assertFalse(self.nft.elements)
+        self.assertIn("verified direct WAN", self.firewall.error)
+        self.nft.document["nftables"].append({"chain": {"family": "ip", "table": "filter",
+            "hook": "forward", "prio": SCOPED_FORWARD_PRIORITY}})
+        self.assertFalse(self.firewall.inspect(100)["supported"])
 
     def test_ownership_collision_no_write(self):
         self.nft.document = document(True)

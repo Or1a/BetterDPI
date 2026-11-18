@@ -15,13 +15,17 @@ import time
 from . import conntrack
 from .config import CONFIG_PATH, domain_matches
 from .scoring import KIB, MIB, REVOKING_GUARDS, fast_score
-from .history import DistributionHistory, peer_key
+from .history import DistributionHistory, MAX_PEER_CONTRIBUTION, peer_key
 
 POLL_SECONDS = 1
+FRESH_SAMPLE_SECONDS = 1.5
 WINDOW = 60
 MAX_TRACKED = 2048
 MAX_SAMPLES = 65536
 MAX_POLL_GAP = 3
+MIN_SERVING_PEERS = 8
+MIN_GROUP_UPLOAD = 2 * MIB
+MIN_PEER_UPLOAD = 128 * KIB
 EXCLUDED = REVOKING_GUARDS | {'suppressed'}
 
 
@@ -32,6 +36,21 @@ def metadata_index(rows):
         identity = conntrack.flow_tuple(row)
         indexed[identity] = None if identity in indexed else row
     return indexed
+
+
+def serving_peer(upload, download):
+    return upload >= MIN_PEER_UPLOAD and upload >= 4 * max(download, 1)
+
+
+def audit_incomplete(callback, cohort, key, entry, up, down, metrics, history, reason, minimum=None,
+                     upload_observations=None):
+    row = dict(entry['row'], group=cohort, ct_id=key[0], upload=up, download=down,
+               connection_upload_bytes=entry['total'][0], metrics=metrics, history_metrics=history,
+               evidence_source='conntrack_fast')
+    if minimum is not None:
+        row['required_upload_bytes'] = minimum
+        row['upload_observations'] = upload_observations
+    callback(row, reason)
 
 
 class FastObserver:
@@ -156,7 +175,7 @@ class FastObserver:
         for row in metadata:
             scope = row.get('scope', self.cohort(row))
             scopes[self.cohort(row)] = scope
-            if EXCLUDED.intersection(row['guards']):
+            if REVOKING_GUARDS.intersection(row['guards']):
                 protected_scopes.add((scope, row['peer']))
                 revoked.update(self.revoke_history(row))
         self.holds = {key: expiry for key, expiry in self.holds.items() if expiry > now}
@@ -183,12 +202,18 @@ class FastObserver:
                 continue
             row = dict(row)
             matched += 1
-            if EXCLUDED.intersection(row['guards']) or row['id'] in self.holds:
+            if REVOKING_GUARDS.intersection(row['guards']):
                 old = self.entries.pop(key, None)
                 for source in (old['row'] if old else None, row):
                     if source is not None:
                         protected_scopes.add((source.get('scope', self.cohort(source)), source['peer']))
                         revoked.update(self.revoke_history(source))
+                continue
+            # A lease suppresses future retries, not the bytes verified before
+            # it was installed. Only a protection or identity change revokes
+            # that earlier distribution evidence.
+            if 'suppressed' in row['guards'] or row['id'] in self.holds:
+                self.entries.pop(key, None)
                 continue
             if row.get('closed') and key not in self.entries:
                 continue
@@ -210,9 +235,11 @@ class FastObserver:
                 if entry is None and len(self.entries) >= MAX_TRACKED:
                     raise ValueError('fast connection capacity')
                 learned = historical.get(self.cohort(row), {})
-                returning = learned.get('ready', False) and row['peer'] in learned.get('qualified', ())
+                established = learned.get('ready', False)
+                returning = established and row['peer'] in learned.get('qualified', ())
                 self.entries[key] = dict(row=row, total=current, samples=deque(), first=now,
-                                         last=now, observed=-math.inf, present=True, returning=returning)
+                                         last=now, observed=-math.inf, present=True, returning=returning,
+                                         established=established)
                 self.counters['baselines'] += 1
                 continue
             previous = entry['total']
@@ -225,6 +252,7 @@ class FastObserver:
                 self.history.revoke(self.cohort(row), row['peer'])
                 entry['first'], entry['observed'] = now, -math.inf
                 entry['returning'] = False
+                entry['established'] = False
                 self.counters['counter_resets'] += 1
                 continue
             up, down = (value - old for value, old in zip(current, previous))
@@ -238,9 +266,12 @@ class FastObserver:
             identity = conntrack.flow_tuple(entry['row'])
             row = indexed.get(identity)
             if (identity in indexed and row is None
-                    or row is not None and EXCLUDED.intersection(row['guards'])):
+                    or row is not None and REVOKING_GUARDS.intersection(row['guards'])):
                 self.history.revoke(self.cohort(entry['row']), entry['row']['peer'])
                 revoked.add((self.cohort(entry['row']), entry['row']['peer']))
+                del self.entries[key]
+                continue
+            if row is not None and ('suppressed' in row['guards'] or row['id'] in self.holds):
                 del self.entries[key]
                 continue
             entry['present'] = key in touched
@@ -259,7 +290,7 @@ class FastObserver:
         # been consumed. Sampling itself does not need to build another score.
         self.rows = []
 
-    def _candidates(self, now):
+    def _candidates(self, now, on_incomplete=None):
         groups, rows = {}, []
         history = self.history.summaries(now)
         for key, entry in self.entries.items():
@@ -272,29 +303,56 @@ class FastObserver:
             for key, entry in members:
                 up = sum(sample[1] for sample in entry['samples'])
                 down = sum(sample[2] for sample in entry['samples'])
-                own[key] = (up, down)
                 peer = peers.setdefault(peer_key(entry['row']['peer']), [0, 0])
                 peer[0] += up
                 peer[1] += down
+                own[key] = (up, down, peer)
                 upload += up
                 download += down
                 stamps.update(sample[0] for sample in entry['samples'] if sample[1])
-            serving = sum(up >= 128 * KIB and up >= 4 * max(down, 1) for up, down in peers.values())
+            serving = distributed = 0
+            for up, down in peers.values():
+                if serving_peer(up, down):
+                    serving += 1
+                    distributed += min(up, MAX_PEER_CONTRIBUTION)
             metrics = dict(peers=len(peers), serving_peers=serving, upload=upload,
                            download=download, upload_minutes=0, active_observations=len(stamps))
             # This conjunction is mandatory even if the user lowers the score
             # threshold. A single upload, fanout or handshake flood cannot pass.
-            burst = serving >= 8 and upload >= 2 * MIB and upload >= 4 * max(download, 1) and len(stamps) >= 3
+            burst = (serving >= MIN_SERVING_PEERS and upload >= MIN_GROUP_UPLOAD
+                     and upload >= 4 * max(download, 1) and len(stamps) >= 3)
             learned = history.get(cohort, {})
             if not burst and not learned.get('ready'):
+                if on_incomplete is not None and upload >= MIN_GROUP_UPLOAD and len(peers) >= 4:
+                    for key, entry in members:
+                        up, down, _peer = own[key]
+                        if entry['present'] and entry['observed'] == now and serving_peer(up, down):
+                            audit_incomplete(on_incomplete, cohort, key, entry, up, down, metrics, learned,
+                                             'distribution_evidence_incomplete')
                 continue
+            current_distribution = (not burst and serving >= MIN_SERVING_PEERS
+                                    and distributed >= MIN_GROUP_UPLOAD and len(stamps) >= 3)
+            if current_distribution:
+                metrics['distributed_upload'] = distributed
             for key, entry in members:
-                up, down = own[key]
-                upload_checks = sum(sample[1] > 0 for sample in entry['samples'])
-                returning = entry['returning'] and entry['row']['peer'] in learned.get('qualified', ())
-                minimum = 128 * KIB if burst else (32 * KIB if returning else 512 * KIB)
-                if (not entry['present'] or entry['observed'] != now or up < minimum
-                        or up < 4 * max(down, 1) or not burst and upload_checks < 2):
+                up, down, peer = own[key]
+                if not entry['present'] or entry['observed'] != now or up < 4 * max(down, 1):
+                    continue
+                growth = [sample for sample in entry['samples'] if sample[1] > 0]
+                if burst:
+                    path, minimum = 'burst', MIN_PEER_UPLOAD
+                elif entry['returning'] and entry['row']['peer'] in learned.get('qualified', ()):
+                    path, minimum = 'returning_peer', 32 * KIB
+                elif current_distribution and entry['established'] and serving_peer(*peer):
+                    # A new peer qualifies earlier only when the rotation was
+                    # established before this flow and is independently active now.
+                    path, minimum = 'current_distribution', MIN_PEER_UPLOAD
+                else:
+                    path, minimum = 'rotating_peers', 512 * KIB
+                if up < minimum or not burst and len(growth) < 2:
+                    if on_incomplete is not None and up >= 32 * KIB:
+                        audit_incomplete(on_incomplete, cohort, key, entry, up, down, metrics, learned,
+                                         'connection_evidence_incomplete', minimum, len(growth))
                     continue
                 row = dict(entry['row'])
                 hint = domain_matches(row.get('host'), self.settings['pcdn_domains'])
@@ -304,8 +362,9 @@ class FastObserver:
                            threshold_met=threshold, wait_seconds=0,
                            decision='block' if threshold and self.settings['mode'] == 'auto' else 'observe',
                            last_observed=now, upload=up, download=down, metrics=metrics,
+                           latest_upload_bytes=growth[-1][1], upload_observations=len(growth),
                            evidence_source='conntrack_fast', ct_id=key[0],
-                           detection_path='burst' if burst else 'returning_peer' if returning else 'rotating_peers',
+                           detection_path=path,
                            aggregation='cross_port', required_upload_bytes=minimum,
                            history_metrics={name: learned.get(name, 0) for name in (
                                'peers', 'serving_peers', 'networks', 'upload', 'download', 'serving_upload',
@@ -313,11 +372,15 @@ class FastObserver:
                            observed_seconds=round(now - entry['first'], 3),
                            connection_upload_bytes=entry['total'][0],
                            connection_download_bytes=entry['total'][1])
+                # The two increasing counters belong to this kernel ID and
+                # metadata incarnation. Gaps and regressions reset the ledger.
+                if len(growth) >= 2 and now - growth[-2][0] <= MAX_POLL_GAP:
+                    row['prior_upload_observed'] = growth[-2][0]
                 rows.append(row)
         return sorted(rows, key=lambda row: (-row['score'], -row['upload'], row['id']))
 
-    def candidates(self, now, metadata=None):
-        if self.error or self.last_success is None or not 0 <= now - self.last_success <= 1.5:
+    def candidates(self, now, metadata=None, on_incomplete=None):
+        if self.error or self.last_success is None or not 0 <= now - self.last_success <= FRESH_SAMPLE_SECONDS:
             return []
         if metadata is not None:
             # A protection/identity update between the kernel poll and this
@@ -325,13 +388,13 @@ class FastObserver:
             current = {row['id']: row for row in metadata}
             by_tuple = metadata_index(metadata)
             for row in metadata:
-                if EXCLUDED.intersection(row['guards']):
+                if REVOKING_GUARDS.intersection(row['guards']):
                     self.revoke_history(row)
             for key, entry in list(self.entries.items()):
                 identity = conntrack.flow_tuple(entry['row'])
                 latest = by_tuple.get(identity)
                 if (identity in by_tuple and latest is None
-                        or latest is not None and EXCLUDED.intersection(latest['guards'])):
+                        or latest is not None and REVOKING_GUARDS.intersection(latest['guards'])):
                     self.revoke_history(entry['row'])
                     del self.entries[key]
                     continue
@@ -339,17 +402,19 @@ class FastObserver:
                 if row is None:
                     entry['present'] = False
                 elif (conntrack.flow_tuple(row) != identity or row['birth'] != entry['row']['birth']
-                      or EXCLUDED.intersection(row['guards'])):
+                      or REVOKING_GUARDS.intersection(row['guards'])):
                     self.revoke_history(entry['row'])
                     del self.entries[key]
                 elif self.cohort(row) != self.cohort(entry['row']):
                     self.history.revoke(self.cohort(entry['row']), entry['row']['peer'])
                     del self.entries[key]
+                elif 'suppressed' in row['guards'] or row['id'] in self.holds:
+                    del self.entries[key]
                 else:
                     entry['row'] = row
                     if row.get('closed'):
                         entry['present'] = False
-        self.rows = self._candidates(self.last_success)
+        self.rows = self._candidates(self.last_success, on_incomplete)
         return self.rows
 
     def suppress(self, row, until):
@@ -366,8 +431,8 @@ class FastObserver:
 
     def status(self, now=None):
         now = (self.last_poll or 0) if now is None else now
-        return dict(revision=3, poll_seconds=POLL_SECONDS, window_seconds=WINDOW,
-                    min_upload_bytes=2 * MIB, min_serving_peers=8,
+        return dict(revision=4, poll_seconds=POLL_SECONDS, window_seconds=WINDOW,
+                    min_upload_bytes=MIN_GROUP_UPLOAD, min_serving_peers=MIN_SERVING_PEERS,
                     min_peer_upload_bytes=128 * KIB, tracked=len(self.entries),
                     matched=self.matched, unattributed=self.unattributed,
                     samples=self.sample_count, candidates=len(self.rows),

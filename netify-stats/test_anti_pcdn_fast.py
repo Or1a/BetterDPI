@@ -13,6 +13,7 @@ from anti_pcdn import conntrack as ct, fast
 from anti_pcdn.config import validate
 from anti_pcdn.fast import FastObserver
 from anti_pcdn.runtime import Worker
+from anti_pcdn.scoring import KIB, MIB
 from test_anti_pcdn_engine import Stream
 import test_anti_pcdn_firewall as firewall_tests
 from test_anti_pcdn_firewall import conntrack_payload, ROW
@@ -70,6 +71,19 @@ class FastTests(unittest.TestCase):
             with self.subTest(count=count, up=up, down=down):
                 self.assertFalse(Scenario(count, threshold=1).burst(up, down))
 
+    def test_audit_samples_incomplete_distribution_without_single_upload_or_exemptions(self):
+        scenario = Scenario(count=6)
+        scenario.metadata[0]['guards'] = ['allowlisted']
+        scenario.metadata[1]['guards'] = ['protected_transport']
+        scenario.burst(up=200 * 1024)
+        reports = []
+        self.assertFalse(scenario.observer.candidates(3, scenario.metadata,
+                                                    lambda row, reason: reports.append((row, reason))))
+        self.assertEqual(len(reports), 4)
+        self.assertEqual({reason for _, reason in reports}, {'distribution_evidence_incomplete'})
+        self.assertTrue(all(row['connection_upload_bytes'] == 600 * 1024 for row, _ in reports))
+        self.assertEqual({row['id'] for row, _ in reports}, {row['id'] for row in scenario.metadata[2:]})
+
     def test_peers_are_distinct_not_parallel_connections(self):
         scenario = Scenario()
         for i, row in enumerate(scenario.metadata):
@@ -90,6 +104,50 @@ class FastTests(unittest.TestCase):
         for i, row in enumerate(scenario.metadata):
             row['cohort'] = 'separate-%s' % i
         self.assertFalse(scenario.burst())
+
+    def mixed_distribution(self, established=True, distinct=8, per_poll=96*KIB, extra_upload=0):
+        scenario = Scenario(9)
+        for i, row in enumerate(scenario.metadata):
+            row.update(peer='11.%d.1.1' % (i % distinct if i < 8 else i), dport=4000+i)
+            scenario.records[i]['tuple'] = ct.flow_tuple(row)
+        if established:
+            cohort = scenario.metadata[0]['cohort']
+            for stamp in (1, 2, 3):
+                scenario.observer.history.record([(cohort, '11.%d.0.2' % n, 192*KIB, KIB)
+                                                  for n in range(16, 20)], stamp)
+        scenario.poll(4)
+        for stamp in (5, 6, 7):
+            scenario.records[-1]['download'] += 4*MIB
+            scenario.records[0]['upload'] += extra_upload
+            rows = scenario.poll(stamp, up=per_poll, down=KIB)
+        return scenario, rows
+
+    def test_established_distribution_promotes_new_peers_in_mixed_group(self):
+        scenario, rows = self.mixed_distribution()
+        self.assertEqual({row['id'] for row in rows}, {row['id'] for row in scenario.metadata[:-1]})
+        self.assertEqual({row['detection_path'] for row in rows}, {'current_distribution'})
+        self.assertTrue(all(r['required_upload_bytes'] == 128*KIB and r['upload'] == 288*KIB for r in rows))
+        self.assertTrue(all(r['metrics']['download'] > r['metrics']['upload'] for r in rows))
+        self.assertTrue(all(r['metrics']['distributed_upload'] == 2304*KIB for r in rows))
+        scenario.metadata[0]['guards'] = ['protected_transport']
+        self.assertFalse(scenario.observer.candidates(7.1, scenario.metadata))
+
+    def test_new_peers_cannot_borrow_current_evidence_as_preexisting_history(self):
+        scenario, rows = self.mixed_distribution(established=False)
+        cohort = scenario.metadata[0]['cohort']
+        self.assertTrue(scenario.observer.history.summaries(7)[cohort]['ready'])
+        self.assertFalse(rows)
+        reports = []
+        scenario.observer.candidates(7, on_incomplete=lambda row, reason: reports.append((row, reason)))
+        self.assertEqual(len(reports), 8)
+        self.assertTrue(all(reason == 'connection_evidence_incomplete' and r['required_upload_bytes'] == 512*KIB
+                            and r['upload_observations'] == 3 for r, reason in reports))
+
+    def test_more_ports_or_one_large_receiver_cannot_unlock_the_lower_byte_floor(self):
+        self.assertFalse(self.mixed_distribution(distinct=4)[1])
+        scenario, rows = self.mixed_distribution(per_poll=48*KIB, extra_upload=256*KIB)
+        self.assertEqual([row['id'] for row in rows], [scenario.metadata[0]['id']])
+        self.assertEqual(rows[0]['detection_path'], 'rotating_peers')
 
     def test_rotating_peers_keep_past_evidence_but_only_live_upload_is_proposed(self):
         scenario = Scenario()
@@ -211,26 +269,39 @@ class FastTests(unittest.TestCase):
             self.assertEqual(record['connection_upload_bytes'], 294912)
             self.assertFalse(record['executed'])
 
-    def test_new_update_during_enforcement_rolls_back_before_next_action(self):
-        scenario = Scenario()
-        scenario.burst()
-        firewall = FakeFirewall()
-        with tempfile.TemporaryDirectory() as directory:
-            worker = Worker(scenario.settings, engine=scenario.stream.engine, firewall=firewall,
-                            runtime_dir=directory, clock=lambda: 3, wall=lambda: 1800000003)
-            worker.connected = worker.cleanup_ready = True
-            worker.applied_generation = 0
-            worker.fast = scenario.observer
-            install = firewall.install
-            def update_during_install(*args):
-                lease = install(*args)
-                worker.submit(dict(type='flow_stats', internal=True, interface='br-lan',
-                                   flow=dict(digest='0', detected_protocol_name='WireGuard')))
-                return lease
-            firewall.install = update_during_install
-            worker.evaluate(3)
-            self.assertEqual(len(firewall.calls), 1)
-            self.assertFalse(firewall.leases)
+    def test_late_protection_during_install_revokes_lease_before_next_action(self):
+        for fields, guard in (({'detected_protocol_name': 'WireGuard'}, 'protected_transport'),
+                              ({'proxy': True}, 'unsupported_proxy'),
+                              ({'shared_transport': True}, 'shared_transport'),
+                              ({'dns_host_name': 'safe.example'}, 'allowlisted')):
+            with self.subTest(guard=guard), tempfile.TemporaryDirectory() as directory:
+                scenario = Scenario(allow_domains=['safe.example'])
+                scenario.burst()
+                engine = scenario.stream.engine
+                digests = {flow.peer: key[1] for key, flow in engine.flows.items()}
+                firewall = FakeFirewall()
+                worker = Worker(scenario.settings, engine=engine, firewall=firewall,
+                                runtime_dir=directory, clock=lambda: 3, wall=lambda: 1800000003)
+                worker.connected = worker.cleanup_ready = True
+                worker.applied_generation = 0
+                worker.fast = scenario.observer
+                install = firewall.install
+
+                def update_during_install(row, seconds, now):
+                    lease = install(row, seconds, now)
+                    worker.submit(dict(type='flow_stats', internal=True, interface='br-lan',
+                                       flow=dict(digest=digests[row['peer']], **fields)))
+                    return lease
+
+                firewall.install = update_during_install
+                with patch.object(firewall, 'release', wraps=firewall.release) as release:
+                    worker.evaluate(3)
+                    release.assert_called_once_with(firewall.calls[0]['id'], 3,
+                                                    'protection_updated', guards=[guard])
+                self.assertEqual(len(firewall.calls), 1)
+                self.assertFalse(firewall.leases)
+                self.assertEqual(worker.counters['protected_leases_released'], 1)
+                self.assertFalse(worker.fast.holds)
 
 
 class CounterSnapshotTests(unittest.TestCase):
@@ -278,6 +349,27 @@ class CounterSnapshotTests(unittest.TestCase):
 
 
 class FastEnforcementTests(unittest.TestCase):
+    def test_two_fresh_counter_increases_remove_the_extra_install_wait(self):
+        scenario = Scenario()
+        row = scenario.burst()[0]
+        harness = firewall_tests.FirewallTests()
+        harness.setUp()
+        harness.identifier = row['ct_id']
+        harness.firewall.neighbours = lambda *_: row['mac']
+        self.assertEqual(harness.firewall.install(row, 30, 3)['ct_id'], row['ct_id'])
+        self.assertFalse(harness.firewall.pending_identity)
+
+    def test_fast_candidate_with_one_recent_increase_still_waits(self):
+        scenario = Scenario()
+        row = scenario.burst()[0]
+        harness = firewall_tests.FirewallTests()
+        harness.setUp()
+        harness.identifier = row['ct_id']
+        harness.firewall.neighbours = lambda *_: row['mac']
+        row.pop('prior_upload_observed')
+        self.assertIsNone(harness.firewall.install(row, 30, 3))
+        self.assertTrue(harness.firewall.pending_identity)
+
     def test_kernel_id_reuse_is_rechecked_before_install(self):
         harness = firewall_tests.FirewallTests()
         harness.setUp()

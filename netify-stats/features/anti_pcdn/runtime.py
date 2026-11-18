@@ -14,16 +14,18 @@ import threading
 import time
 
 from .engine import Engine
+from .audit import AutoJournal
 from .scoring import REVOKING_GUARDS
-from .firewall import Firewall
+from .firewall import Firewall, MAX_DEVICE_LEASES
 from .observation import ObservationJournal
 from .fast import FastObserver, POLL_SECONDS
 
-QUEUE_LIMIT = 512
+QUEUE_LIMIT = 2048
+QUEUE_DRAIN_LIMIT = 128
+QUEUE_DRAIN_SECONDS = 0.02
 EVALUATE_SECONDS = 1
 STATUS_SECONDS = 3
 MAX_LEASES = 128
-MAX_DEVICE_LEASES = 16
 MAX_ACTIONS = 4
 FLOW_FIELDS = ('digest', 'first_seen_at', 'last_seen_at', 'local_mac', 'other_mac',
                'local_ip', 'other_ip', 'local_port', 'other_port', 'ip_protocol',
@@ -61,8 +63,10 @@ class Worker(threading.Thread):
         super().__init__(name='betterdpi-anti-pcdn', daemon=True)
         self.settings = settings
         self.clock, self.wall = clock, wall
+        self.audit = AutoJournal(runtime_dir) if settings['mode'] == 'auto' else None
         self.engine = engine if engine is not None else Engine(settings, now=clock(), router_macs=router_macs)
-        self.firewall = firewall if firewall is not None else Firewall()
+        self.firewall = firewall if firewall is not None else Firewall(
+            audit=self.audit.record if self.audit is not None else None, wall=wall)
         self.runtime_dir = runtime_dir
         self.queue = queue.Queue(QUEUE_LIMIT)
         self.stopping = threading.Event()
@@ -99,17 +103,25 @@ class Worker(threading.Thread):
             self.fast.reset(reason)
         self.rows = []
 
-    def clear_leases(self, failure_kind):
+    def clear_leases(self, failure_kind, reason='worker_cleanup'):
         """Every cleanup path must confirm both the operation and empty state."""
         self.cleanup_ready = False
         self.last_cleanup_attempt = self.clock()
         try:
-            if self.firewall.clear() is False or self.firewall.leases:
+            if self.firewall.clear(reason) is False or self.firewall.leases:
                 raise RuntimeError(self.firewall.error or 'Feature cleanup could not be confirmed.')
             self.cleanup_ready = True
         except Exception as exc:
             self.event(failure_kind, error=str(exc)[:240])
         return self.cleanup_ready
+
+    def action_interrupted(self, generation):
+        if self.stopping.is_set():
+            return 'worker_stopping'
+        if not self.connected:
+            return 'collector_disconnected'
+        current, reason = self.generation
+        return reason if current != generation else ''
 
     def submit(self, message):
         if self.stopping.is_set():
@@ -133,7 +145,7 @@ class Worker(threading.Thread):
         if generation != self.applied_generation:
             self.reset_evidence(now, reason)
             if self.firewall.leases:
-                self.clear_leases('gap_cleanup_failed')
+                self.clear_leases('gap_cleanup_failed', reason)
             self.applied_generation = generation
 
     def consume(self, item):
@@ -157,6 +169,19 @@ class Worker(threading.Thread):
             if update is not None:
                 self.revoke_protected(now, [update])
 
+    def drain_observations(self):
+        """Apply pending updates in order before judging evidence or a new lease."""
+        deadline = self.clock() + QUEUE_DRAIN_SECONDS
+        for _ in range(QUEUE_DRAIN_LIMIT):
+            if self.stopping.is_set() or self.clock() >= deadline:
+                break
+            try:
+                item = self.queue.get_nowait()
+            except queue.Empty:
+                return True
+            self.consume(item)
+        return self.queue.empty()
+
     def revoke_protected(self, now, metadata):
         """Protection overrides an existing lease, not just a new proposal."""
         protected = [row for row in metadata if REVOKING_GUARDS.intersection(row.get('guards', ()))]
@@ -164,13 +189,15 @@ class Worker(threading.Thread):
             return True
         def identity(row):
             return tuple(row.get(name) for name in ('interface', 'mac', 'ip', 'peer', 'sport', 'dport', 'proto'))
-        tokens = {row['id'] for row in protected}
-        tuples = {identity(row) for row in protected}
+        tokens = {row['id']: row for row in protected}
+        tuples = {identity(row): row for row in protected}
         for token, lease in list(self.firewall.leases.items()):
-            if token not in tokens and identity(lease) not in tuples:
+            row = tokens.get(token) or tuples.get(identity(lease))
+            if row is None:
                 continue
+            guards = sorted(REVOKING_GUARDS.intersection(row['guards']))
             try:
-                released = self.firewall.release(token, now)
+                released = self.firewall.release(token, now, 'protection_updated', guards=guards)
                 if released is False or token in self.firewall.leases:
                     raise RuntimeError(self.firewall.error or 'protected lease release failed')
                 self.counters['protected_leases_released'] += 1
@@ -179,7 +206,10 @@ class Worker(threading.Thread):
                 # An opt-out must never wait for a normal retry/TTL. If precise
                 # removal fails, try removing only this feature's owned table.
                 self.event('protection_release_failed', id=token, error=str(exc)[:240])
-                self.clear_leases('protection_cleanup_failed')
+                if self.audit is not None:
+                    self.audit.record('release_failed', self.wall(), lease, reason='protection_updated',
+                                      guards=guards, detail=str(exc)[:200])
+                self.clear_leases('protection_cleanup_failed', 'protection_cleanup')
                 return False
         return True
 
@@ -238,12 +268,17 @@ class Worker(threading.Thread):
             self.event('released', id=token, request_id=request_id)
         except Exception as exc:
             self.event('release_failed', request_id=str(request.get('request_id', ''))[:64], error=str(exc)[:256])
+            if self.audit is not None and isinstance(request.get('id'), str):
+                lease = self.firewall.leases.get(request['id'])
+                if lease is not None:
+                    self.audit.record('release_failed', self.wall(), lease, reason='manual_release', detail=str(exc)[:200])
         finally:
             os.unlink(path)
 
     def evaluate(self, now):
         self._sync_gap(now)
-        self.firewall.expire(now)
+        generation = self.applied_generation
+        self.firewall.expire(now, cleanup=False)
         if not self.connected or self.stopping.is_set():
             self.rows = []
             return
@@ -252,11 +287,16 @@ class Worker(threading.Thread):
         if not self.revoke_protected(now, metadata):
             self.rows = []
             return
+        wall = self.wall()
         if self.fast is not None:
             # Prefer the independent fast evidence for a tuple, never add the
             # two byte ledgers or issue duplicate proposals for one connection.
             combined = {row['id']: row for row in rows}
-            for row in self.fast.candidates(now, metadata):
+            report = None
+            if self.audit is not None and self.settings['mode'] == 'auto':
+                def report(row, reason):
+                    self.audit_decision(row, wall, 'deferred', reason)
+            for row in self.fast.candidates(now, metadata, on_incomplete=report):
                 combined[row['id']] = row
             rows = sorted(combined.values(), key=lambda row: (
                 not (row['threshold_met'] and not row['guards']), -row['score'], -row['upload'], row['id']))
@@ -267,40 +307,95 @@ class Worker(threading.Thread):
                 coverage['execution_readiness'] = dict(self.execution_readiness)
                 self.observations.record(rows, self.settings, now, self.wall(), coverage)
             return
-        if (self.settings['mode'] != 'auto' or not self.cleanup_ready
-                or self.execution_readiness.get('supported') is False):
+        if self.settings['mode'] != 'auto':
+            return
+        eligible = [row for row in rows if row.get('decision') == 'block'
+                    and not row.get('guards') and row['id'] not in self.firewall.leases]
+        if not self.cleanup_ready or self.execution_readiness.get('supported') is False:
+            if not self.cleanup_ready:
+                self.audit_deferred(eligible, wall, 'cleanup_pending')
+            else:
+                self.audit_deferred(eligible, wall, 'platform_unsupported',
+                                    detail=self.execution_readiness.get('reason', ''))
+            self.audit_watch(rows, wall)
+            return
+        self.counters['eligible_candidates'] += len(eligible)
+        if not eligible:
+            self.retries.clear()
+            self.audit_watch(rows, wall)
             return
         actions = 0
         suppressed = []
-        generation = self.generation[0]
-        current_ids = {row['id'] for row in rows}
+        current_ids = {row['id'] for row in eligible}
         self.retries = {key: value for key, value in self.retries.items() if key in current_ids}
         # A pending exact identity probe gets its second fresh observation on
         # the next tick. Other failures back off so later peers are not starved.
-        rows = sorted(rows, key=lambda row: not self.retries.get(row['id'], (0, False))[1])
+        eligible.sort(key=lambda row: (
+            not self.retries.get(row['id'], (0, False))[1],
+            -row['score'], -row.get('latest_upload_bytes', 0), -row.get('upload', 0)))
         per_device = Counter(lease.get('mac') for lease in self.firewall.leases.values())
-        for row in rows:
-            if (self.stopping.is_set() or not self.connected or self.generation[0] != generation
-                    or not self.queue.empty() or actions >= MAX_ACTIONS or len(self.firewall.leases) >= MAX_LEASES):
+        for index, row in enumerate(eligible):
+            interrupted = self.action_interrupted(generation)
+            if interrupted or not self.queue.empty():
+                self.counters['actions_interrupted'] += 1
+                self.audit_deferred(eligible[index:], wall, interrupted or 'pending_observations')
                 break
-            if row.get('decision') != 'block' or row.get('guards') or row['id'] in self.firewall.leases:
-                continue
+            if actions >= MAX_ACTIONS:
+                self.counters['action_budget_deferred'] += 1
+                self.audit_deferred(eligible[index:], wall, 'action_budget')
+                break
+            if len(self.firewall.leases) >= MAX_LEASES:
+                self.counters['global_lease_limit'] += 1
+                self.audit_deferred(eligible[index:], wall, 'global_lease_limit')
+                break
             if per_device[row['mac']] >= MAX_DEVICE_LEASES:
                 self.counters['action_limit'] += 1
+                self.audit_decision(row, wall, 'deferred', 'device_lease_limit')
                 continue
             action_now = self.clock()
             if self.retries.get(row['id'], (0, False))[0] > action_now:
                 continue
             actions += 1
+            self.counters['action_attempts'] += 1
             lease = self.firewall.install(row, self.settings['ban_seconds'], action_now)
-            if (self.generation[0] != generation or not self.connected or self.stopping.is_set()
-                    or not self.queue.empty()):
+            interrupted = self.action_interrupted(generation)
+            pending = not self.queue.empty()
+            if not interrupted and pending:
+                gaps = self.engine.counters.get('gaps', 0)
+                reviewed = self.drain_observations()
+                interrupted = self.action_interrupted(generation)
+                if not interrupted and not reviewed:
+                    interrupted = 'observation_backlog'
+                if not interrupted and (not self.cleanup_ready or lease and row['id'] not in self.firewall.leases):
+                    interrupted = 'protection_review'
+                if not interrupted and self.engine.counters.get('gaps', 0) != gaps:
+                    interrupted = 'observation_gap'
+            if interrupted:
                 if lease:
-                    self.firewall.release(lease['id'], self.clock())
+                    self.counters['interrupted_installs'] += 1
+                active = self.firewall.leases.get(row['id'])
+                if active is not None:
+                    try:
+                        released = self.firewall.release(row['id'], self.clock(), interrupted)
+                        if released is False or row['id'] in self.firewall.leases:
+                            raise RuntimeError(self.firewall.error or 'Interrupted lease could not be released.')
+                    except Exception as exc:
+                        self.event('interrupted_release_failed', id=row['id'], error=str(exc)[:240])
+                        if self.audit is not None:
+                            self.audit.record('release_failed', self.wall(), active, reason=interrupted,
+                                              detail=str(exc)[:200])
+                        self.clear_leases('interrupted_cleanup_failed', 'interrupted_cleanup')
+                self.audit_attempt(row, wall, lease, interrupted)
+                self.audit_deferred(eligible[index+1:], wall, interrupted)
                 break
+            self.audit_attempt(row, wall, lease)
             if lease:
                 per_device[row['mac']] += 1
                 self.counters['leases_installed'] += 1
+                if pending:
+                    self.counters['leases_kept_after_queue_drain'] += 1
+                if row.get('evidence_source') == 'conntrack_fast':
+                    self.counters['fast_leases_installed'] += 1
                 self.event('lease_installed', id=lease['id'], score=row['score'], mac=row['mac'])
                 suppressed.append((row, lease['expires']))
                 self.retries.pop(row['id'], None)
@@ -312,21 +407,69 @@ class Worker(threading.Thread):
                     # readback and rollback failed. Its retries are not evidence.
                     suppressed.append((row, uncertain['expires']))
                     self.event('verification_failed', id=row['id'], error=self.firewall.error)
-                pending = bool(getattr(self.firewall, 'pending_identity', False))
-                self.retries[row['id']] = (action_now + (EVALUATE_SECONDS if pending else 60), pending)
+                waiting = bool(getattr(self.firewall, 'pending_identity', False))
+                self.counters['identity_wait' if waiting else 'action_errors'] += 1
+                self.retries[row['id']] = (action_now + (EVALUATE_SECONDS if waiting else 60), waiting)
                 row['execution_error'] = self.firewall.error
+            if pending:
+                # New evidence may change the remaining candidates or group score.
+                # Keep the reviewed lease and score again before another install.
+                self.audit_deferred(eligible[index+1:], wall, 'observations_updated')
+                break
         # Plans in this one bounded batch share the same pre-action evidence.
         # Subsequent retries cannot prolong a lease or raise the group score.
         for row, until in suppressed:
-            self.engine.suppress(row, until)
-            if self.fast is not None:
-                self.fast.suppress(row, until)
+            if row['id'] in self.firewall.leases:
+                self.engine.suppress(row, until)
+                if self.fast is not None:
+                    self.fast.suppress(row, until)
+        self.audit_watch(rows, wall)
+
+    def audit_decision(self, row, wall, kind, reason, **fields):
+        if self.audit is not None:
+            self.audit.decision(row, wall, kind, reason, threshold=self.settings['threshold'], **fields)
+
+    def audit_deferred(self, rows, wall, reason, **fields):
+        for row in rows:
+            self.audit_decision(row, wall, 'deferred', reason, **fields)
+
+    def audit_attempt(self, row, wall, lease, interrupted=''):
+        if self.audit is None:
+            return
+        kernel_outcome = getattr(self.firewall, 'install_outcome', None)
+        checked_upload = getattr(self.firewall, 'checked_upload', None)
+        finished = round(self.wall(), 3)
+        if lease:
+            self.audit_decision(row, wall, 'decision', interrupted or 'rule_verified',
+                                lease=lease.get('chain'), connection_upload_bytes_at_check=checked_upload,
+                                action_result='withdrawal_required' if interrupted else 'installed',
+                                action_finished_at=finished)
+        else:
+            reason = kernel_outcome or ('identity_wait' if getattr(self.firewall, 'pending_identity', False) else 'install_failed')
+            self.audit_decision(row, wall, 'deferred', interrupted or reason, kernel_outcome=reason,
+                                detail=self.firewall.error,
+                                connection_upload_bytes_at_check=checked_upload, action_finished_at=finished,
+                                lease=getattr(self.firewall, 'attempt_chain', None))
+
+    def audit_watch(self, rows, wall):
+        if self.audit is None:
+            return
+        for row in rows:
+            guards = row.get('guards', ())
+            if REVOKING_GUARDS.intersection(guards) or 'suppressed' in guards or 'not_uploading' in guards:
+                continue
+            threshold_met = row.get('threshold_met')
+            if ((threshold_met and guards) or
+                    (threshold_met is False and row.get('upload', 0) >= 128 * 1024
+                     and row.get('metrics', {}).get('peers', 0) >= 8)):
+                reason = 'evidence_incomplete' if guards else 'below_score'
+                self.audit_decision(row, wall, 'deferred', reason, guards=guards)
 
     def check_platform(self, now):
         if hasattr(self.firewall, 'inspect'):
             self.execution_readiness = self.firewall.inspect(now)
             if self.execution_readiness.get('supported') is False and self.firewall.leases:
-                self.clear_leases('capability_cleanup_failed')
+                self.clear_leases('capability_cleanup_failed', 'platform_unsupported')
 
     def publish(self, now, stopped=False):
         leases = []
@@ -343,8 +486,13 @@ class Worker(threading.Thread):
                      execution_readiness=dict(self.execution_readiness),
                      metadata_error=self.recovery_error,
                      events=list(self.events), queue_depth=self.queue.qsize())
+        if hasattr(self.firewall, 'drop_status'):
+            state['drop_counters'] = self.firewall.drop_status()
         if self.observations is not None:
             state['observations'] = self.observations.status()
+        if self.audit is not None:
+            self.audit.flush()
+            state['auto_audit'] = self.audit.status()
         if self.fast is not None:
             state['fast_path'] = self.fast.status(now)
         if hasattr(self.engine, 'coverage'):
@@ -371,6 +519,9 @@ class Worker(threading.Thread):
 
     def run(self):
         try:
+            if self.audit is not None:
+                self.audit.record('session_started', self.wall(), {}, threshold=self.settings['threshold'],
+                                  duration_seconds=self.settings['ban_seconds'])
             # Clean only the feature-owned table after restart, before scoring.
             self.clear_leases('startup_cleanup_failed')
             while not self.stopping.is_set():
@@ -385,23 +536,28 @@ class Worker(threading.Thread):
                         self.clear_leases('startup_cleanup_failed')
                         self.reset_evidence(self.clock(), 'startup_cleanup')
                     self.release_requests(now)
-                    self.firewall.expire(now)
+                    self.firewall.expire(now, cleanup=False)
                     self.check_platform(now)
+                    if hasattr(self.firewall, 'sample_drops'):
+                        self.firewall.sample_drops()
+                    self.firewall.expire(now)
                     self.publish(now)
                     self.last_status = now
                 now = self.clock()
                 if now - self.last_evaluation >= EVALUATE_SECONDS:
-                    # Do not act while old events are waiting to be evaluated.
-                    if self.queue.empty():
-                        if self.fast is not None and self.connected and now - self.last_fast >= POLL_SECONDS:
-                            self.fast.poll(self.engine.fast_metadata(now), now)
-                            self.last_fast = now
-                        # Kernel reads are bounded but can receive new events.
-                        # Apply their protection changes before considering an action.
-                        if not self.queue.empty():
+                    if not self.drain_observations():
+                        self.counters['evaluation_queue_deferred'] += 1
+                        continue
+                    now = self.clock()
+                    if self.fast is not None and self.connected and now - self.last_fast >= POLL_SECONDS:
+                        self.fast.poll(self.engine.fast_metadata(now), now)
+                        self.last_fast = now
+                        # A kernel read can overlap incoming protection updates.
+                        if not self.drain_observations():
+                            self.counters['evaluation_queue_deferred'] += 1
                             continue
-                        self.evaluate(now)
-                        self.last_evaluation = now
+                    self.last_evaluation = self.clock()
+                    self.evaluate(self.last_evaluation)
         except Exception as exc:
             self.error = str(exc)[:512]
         finally:
@@ -409,7 +565,7 @@ class Worker(threading.Thread):
             self.rows = []
             if self.fast is not None:
                 self.fast.checkpoint(self.clock(), force=True)
-            if not self.clear_leases('shutdown_cleanup_failed'):
+            if not self.clear_leases('shutdown_cleanup_failed', 'worker_stopping'):
                 self.error = self.error or self.firewall.error or 'Feature cleanup could not be confirmed.'
             try:
                 self.publish(self.clock(), stopped=True)

@@ -9,7 +9,8 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'features'))
 from anti_pcdn.config import DEFAULTS, save
-from anti_pcdn.runtime import Worker, QUEUE_LIMIT, MAX_ACTIONS
+from anti_pcdn.audit import AutoJournal, MAX_PENDING_BYTES
+from anti_pcdn.runtime import Worker, QUEUE_LIMIT, QUEUE_DRAIN_LIMIT, MAX_ACTIONS
 from netify_features import FeatureBridge
 
 
@@ -47,14 +48,14 @@ class FakeFirewall:
         self.leases[row['id']] = lease
         return lease
 
-    def release(self, token, now):
+    def release(self, token, now, reason='manual_release', **fields):
         del self.leases[token]
         return True
 
-    def expire(self, now):
+    def expire(self, now, cleanup=True):
         self.leases = {key: lease for key, lease in self.leases.items() if lease['expires'] > now}
 
-    def clear(self):
+    def clear(self, reason='worker_cleanup'):
         self.leases.clear()
 
 
@@ -265,6 +266,40 @@ class RuntimeTest(unittest.TestCase):
         self.worker.check_platform(self.now)
         self.assertFalse(self.worker.execution_readiness['supported'])
 
+    def test_auto_audit_tracks_deferrals_and_trigger_bytes_but_excludes_protected_rows(self):
+        rows = [self.row(n, upload=200000, connection_upload_bytes=350000, threshold_met=True,
+                         evidence_source='conntrack_fast', ct_id=n) for n in range(8)]
+        rows[6]['guards'] = ['protected_transport']
+        rows[7]['guards'] = ['allowlisted']
+        self.engine.rows = rows
+        self.firewall.pending = True
+        self.worker.evaluate(self.now)
+        self.worker.retries.clear()  # Revisit the exact same decision states.
+        self.worker.evaluate(self.now)
+        self.worker.publish(self.now)
+        with open(self.worker.audit.path) as stream:
+            entries = [json.loads(line) for line in stream]
+        self.assertEqual(len(entries), 6)
+        self.assertEqual({r['reason'] for r in entries}, {'identity_wait', 'action_budget'})
+        self.assertTrue(all(r['connection_upload_bytes'] == 350000 for r in entries))
+        self.assertEqual(os.stat(self.worker.audit.path).st_mode & 0o777, 0o600)
+
+    def test_auto_audit_caps_buffer_reserves_lifecycle_space_and_rotates(self):
+        journal = AutoJournal(self.directory.name)
+        for n in range(500):
+            journal.record('deferred', 1, self.row(n), detail='d' * 400)
+        self.assertGreater(journal.dropped, 0)
+        self.assertTrue(journal.record('first_drop', 2, self.row(), direction='upload'))
+        self.assertLessEqual(journal.pending_bytes, MAX_PENDING_BYTES)
+        with patch('anti_pcdn.audit.MAX_FILE_BYTES', MAX_PENDING_BYTES):
+            with open(journal.path, 'wb') as handle:
+                handle.truncate(MAX_PENDING_BYTES)
+            journal.flush()
+        self.assertEqual(journal.pending_bytes, 0)
+        self.assertEqual(os.stat(journal.path + '.1').st_size, MAX_PENDING_BYTES)
+        with open(journal.path) as stream:
+            self.assertEqual([json.loads(line) for line in stream][-1]['kind'], 'first_drop')
+
     def test_unverified_kernel_write_does_not_feed_retry_evidence(self):
         self.engine.rows = [self.row()]
         def uncertain(row, seconds, now):
@@ -324,6 +359,127 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(len(self.firewall.calls), 1)
         self.assertFalse(self.firewall.leases)
         self.assertFalse(self.engine.suppressed)
+
+    def test_ordinary_event_during_install_keeps_lease_and_rechecks_batch(self):
+        self.engine.rows = [self.row(1), self.row(2)]
+        install = self.firewall.install
+
+        def submit_during_install(row, seconds, now):
+            lease = install(row, seconds, now)
+            self.worker.submit(self.event())
+            return lease
+
+        self.firewall.install = submit_during_install
+        self.worker.evaluate(self.now)
+        self.assertEqual(list(self.firewall.leases), [self.row(1)['id']])
+        self.assertEqual(len(self.engine.observations), 1)
+        self.assertEqual(len(self.engine.suppressed), 1)
+        self.assertEqual(self.worker.counters['interrupted_installs'], 0)
+        self.assertEqual(self.worker.counters['leases_kept_after_queue_drain'], 1)
+        self.assertTrue(self.worker.queue.empty())
+        self.worker.evaluate(self.now + 1)
+        self.assertEqual(list(self.firewall.leases), [self.row(1)['id'], self.row(2)['id']])
+
+    def test_backlog_after_install_withdraws_only_the_unreviewed_lease(self):
+        self.worker.applied_generation = self.worker.generation[0]
+        old = self.firewall.install(self.row(0), 120, self.now)
+        self.engine.rows = [self.row(1), self.row(2)]
+        install = self.firewall.install
+
+        def backlog(row, seconds, now):
+            lease = install(row, seconds, now)
+            for _ in range(QUEUE_DRAIN_LIMIT + 1):
+                self.worker.submit(self.event())
+            return lease
+
+        self.firewall.install = backlog
+        with patch.object(self.firewall, 'release', wraps=self.firewall.release) as release:
+            self.worker.evaluate(self.now)
+            release.assert_called_once_with(self.row(1)['id'], self.now, 'observation_backlog')
+        self.assertEqual(list(self.firewall.leases), [old['id']])
+        self.assertEqual(len(self.engine.observations), QUEUE_DRAIN_LIMIT)
+        self.assertEqual(self.worker.queue.qsize(), 1)
+        self.assertFalse(self.engine.suppressed)
+
+    def test_gap_during_scoring_vetoes_stale_candidates_with_empty_queue(self):
+        def score_with_gap(_now):
+            self.worker.gap('invalid_event')
+            return [self.row(1)]
+
+        self.engine.candidates = score_with_gap
+        self.worker.evaluate(self.now)
+        self.assertTrue(self.worker.queue.empty())
+        self.assertFalse(self.firewall.calls)
+
+    def test_failed_protection_cleanup_does_not_keep_another_new_lease(self):
+        self.worker.applied_generation = self.worker.generation[0]
+        protected = self.row(0, peer='192.0.2.1')
+        self.firewall.install(protected, 120, self.now)
+        self.engine.rows = [self.row(1, peer='192.0.2.2')]
+        self.engine.protection_update = Mock(return_value=dict(protected, guards=['allowlisted']))
+        install = self.firewall.install
+        release = self.firewall.release
+
+        def submit_during_install(row, seconds, now):
+            lease = install(row, seconds, now)
+            self.worker.submit(self.event())
+            return lease
+
+        def fail_protected_release(token, now, reason, **fields):
+            if token == protected['id']:
+                return False
+            return release(token, now, reason, **fields)
+
+        self.firewall.install = submit_during_install
+        self.firewall.release = fail_protected_release
+        self.firewall.clear = Mock(return_value=False)
+        self.worker.evaluate(self.now)
+        self.assertEqual(list(self.firewall.leases), [protected['id']])
+        self.assertFalse(self.worker.cleanup_ready)
+        self.assertEqual(self.worker.counters['interrupted_installs'], 1)
+        self.assertFalse(self.engine.suppressed)
+
+    def test_run_consumes_reports_arriving_during_kernel_poll_before_evaluation(self):
+        self.worker.last_evaluation = self.now - 1
+        self.worker.last_status = self.now
+        self.worker.fast = Mock()
+        self.engine.fast_metadata = Mock(return_value=[])
+        self.worker.fast.poll.side_effect = lambda *_: self.worker.submit(self.event(total_bytes=110))
+        self.worker.submit(self.event(total_bytes=100))
+
+        def evaluate(_now):
+            self.assertEqual([x[0]['flow']['total_bytes'] for x in self.engine.observations], [100, 110])
+            self.worker.request_stop()
+
+        self.worker.evaluate = Mock(side_effect=evaluate)
+        self.worker.run()
+        self.worker.evaluate.assert_called_once_with(self.now)
+        self.assertEqual(self.worker.counters['evaluation_queue_deferred'], 0)
+
+    def test_incomplete_window_takes_precedence_over_low_score_in_auto_audit(self):
+        guarded = self.row(1, threshold_met=False, upload=200000, metrics={'peers': 10})
+        guarded.update(guards=['incomplete_window'], decision='observe')
+        complete = self.row(2, threshold_met=False, upload=200000, metrics={'peers': 10})
+        complete.update(decision='observe')
+        self.engine.rows = [guarded, complete]
+        self.worker.evaluate(self.now)
+        self.assertEqual([json.loads(line)['reason'] for line in self.worker.audit.pending],
+                         ['evidence_incomplete', 'below_score'])
+
+    def test_failed_release_after_interrupted_install_clears_owned_leases(self):
+        self.engine.rows = [self.row(1), self.row(2)]
+        install = self.firewall.install
+        def interrupted(row, seconds, now):
+            lease = install(row, seconds, now)
+            self.worker.gap('queue_overflow')
+            return lease
+        self.firewall.install = interrupted
+        self.firewall.release = lambda *_: False
+        self.worker.evaluate(self.now)
+        self.assertEqual(len(self.firewall.calls), 1)
+        self.assertFalse(self.firewall.leases)
+        self.assertFalse(self.engine.suppressed)
+        self.assertEqual(self.worker.counters['interrupted_installs'], 1)
 
     def test_release_acknowledges_and_resets_observation_window(self):
         self.engine.rows = [self.row()]

@@ -143,7 +143,14 @@ def decode_conntrack(payload, expected):
     identifier = integer(fields.get(12), 4)
     if not identifier:
         raise IdentityError("missing stable conntrack ID")
-    return {"id": identifier, "tuple": original}
+    result = {"id": identifier, "tuple": original}
+    for key, name in ((9, "original_bytes"), (10, "reply_bytes")):
+        if key in fields:
+            try:
+                result[name] = integer(attributes(fields[key]).get(2), 8)
+            except IdentityError:
+                pass  # A missing counter does not invalidate the validated identity.
+    return result
 
 
 def reverse(identity):
@@ -168,6 +175,11 @@ def lookup(row):
                 continue
             raise
         result["lan_direction"] = direction
+        original_bytes = result.pop("original_bytes", None)
+        reply_bytes = result.pop("reply_bytes", None)
+        upload = original_bytes if direction == "original" else reply_bytes
+        if upload is not None:
+            result['upload_bytes'] = upload
         return result
 
 

@@ -16,6 +16,7 @@ MAX_BUCKETS = 65536
 MAX_COHORT_PEERS = 512
 MAX_COHORT_BUCKETS = 8192
 MAX_FILE_BYTES = 8 * MIB
+MAX_PEER_CONTRIBUTION = 512 * KIB
 
 
 def peer_key(peer):
@@ -141,7 +142,7 @@ class DistributionHistory:
                 row['serving_peers'] += 1
                 row['serving_upload'] += up
                 row['serving_download'] += down
-                row['distributed_upload'] += min(up, 512 * KIB)
+                row['distributed_upload'] += min(up, MAX_PEER_CONTRIBUTION)
                 # A qualified IPv6 prefix does not make a previously unseen
                 # address eligible for the returning-peer byte discount.
                 row['qualified'].update(receiver['qualified'])
@@ -158,7 +159,7 @@ class DistributionHistory:
         return dict(window_seconds=WINDOW, peers=len(self.peers), cohorts=len(rows),
                     qualified_cohorts=sum(row['ready'] for row in rows.values()),
                     min_serving_peers=4, min_networks=3, min_distributed_upload_bytes=2 * MIB,
-                    max_peer_contribution_bytes=512 * KIB,
+                    max_peer_contribution_bytes=MAX_PEER_CONTRIBUTION,
                     max_cohort_peers=MAX_COHORT_PEERS, max_cohort_buckets=MAX_COHORT_BUCKETS,
                     counters=dict(self.counters), error=self.error)
 

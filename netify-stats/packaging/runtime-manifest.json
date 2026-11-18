@@ -31,6 +31,7 @@
   "features/anti_pcdn/conntrack.py": ["/usr/lib/netify-stats/anti_pcdn/conntrack.py", "0644"],
   "features/anti_pcdn/firewall.py": ["/usr/lib/netify-stats/anti_pcdn/firewall.py", "0644"],
   "features/anti_pcdn/observation.py": ["/usr/lib/netify-stats/anti_pcdn/observation.py", "0644"],
+  "features/anti_pcdn/audit.py": ["/usr/lib/netify-stats/anti_pcdn/audit.py", "0644"],
   "features/anti_pcdn/runtime.py": ["/usr/lib/netify-stats/anti_pcdn/runtime.py", "0644"],
   "anti_pcdn_rpc.py": ["/usr/libexec/rpcd/betterdpi-anti-pcdn", "0755"],
   "anti-pcdn-acl.json": ["/usr/share/rpcd/acl.d/luci-app-betterdpi-anti-pcdn.json", "0644"],

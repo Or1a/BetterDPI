@@ -163,9 +163,9 @@ class AlgorithmTests(unittest.TestCase):
         harness.setUp()
         self.assertIsNotNone(harness.install())
         rules = [line for _args, script in harness.nft.calls if script
-                 for line in script.splitlines() if 'counter drop' in line]
+                 for line in script.splitlines() if ' drop comment ' in line]
         self.assertEqual(len(rules), 2)
-        self.assertTrue(all('meta mark 0 ct mark 0 counter drop' in rule for rule in rules))
+        self.assertTrue(all('meta mark 0 ct mark 0 counter name ' in rule for rule in rules))
 
     def test_global_observation_loss_removes_existing_feature_leases(self):
         scenario = Scenario()
