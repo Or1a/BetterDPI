@@ -4,26 +4,18 @@ BetterDPI is a LuCI plugin for local traffic analysis on OpenWrt, using Netify t
 
 BetterDPI 是用于 OpenWrt 的本地流量分析 LuCI 插件，通过 Netify 识别设备、应用和网站流量。
 
-V0.3.2 新增 WAN 独立分项账、设备侧 VPN 子集和隧道接口计数，明确防止 LAN/WAN/隧道重复相加，并显示带符号差额及采集缺口。仍保留 7 天明细、更早数据累计，继续使用 `/tmp`。
+## BetterDPI V0.4.3
 
-主线源码新增默认关闭的实验性 Anti-PCDN：独立页面、短期行为评分、白名单和有期限的连接级自动封禁，复用当前 Netify 采集。使用条件、阈值及限制见 [Anti-PCDN 说明](docs/anti-pcdn-design.md)。
+BetterDPI 可在已确认的直连 WAN 路径上识别跨端口、多对端上传，并按连接执行短期封禁。VPN、代理和放行名单优先通行。自动模式将触发时的上传量、撤回原因和内核首次丢包的时间区间记录在路由器的 `/tmp` 中。[Anti-PCDN 说明](docs/anti-pcdn-design.md)
 
-## V0.4.2 试用版 / Trial release
+流量趋势使用平滑曲线。WAN 统计将带有明确 Tailscale 或 ZeroTier 协议标签的流量归为 VPN 隧道，已有小时记录和归档也使用相同口径。[发布说明](RELEASE-NOTES.md)
 
-V0.4.2 修复诊断日志暴露的 Anti-PCDN 覆盖问题：普通小流量端口不再占满上传评分名额，缺失连接身份可从现有 Netify 导出恢复，已知局部缺口只影响相关连接组。新增跨端口设备观察分和当前资源占用，避免把低分误读为无风险。持续 TCP 上传的分钟图不再在四个分钟条目后漏记，迟到代理纠正仍保持去重。
-
-本版本继续按 GitHub **预发布（Pre-release）**提供试用。两个官方 SDK 包已构建并核对，可从 [V0.4.2 发布页](https://github.com/Or1a/BetterDPI/releases/tag/V0.4.2)下载；修复和验证范围见[本轮记录](docs/anti-pcdn-042-fixes.md)。稳定版仍为 V0.3.2，`releases/latest` 与应用内更新不会自动提供试用版。
-
-| OpenWrt | V0.4.2 试用包 |
+| OpenWrt | 安装包 |
 | --- | --- |
-| 24.10（IPK） | [BetterDPI-openwrt-24.10-all.ipk](https://github.com/Or1a/BetterDPI/releases/download/V0.4.2/BetterDPI-openwrt-24.10-all.ipk) |
-| 25.12（APK） | [BetterDPI-openwrt-25.12-all.apk](https://github.com/Or1a/BetterDPI/releases/download/V0.4.2/BetterDPI-openwrt-25.12-all.apk) |
+| 24.10 | [IPK](https://github.com/Or1a/BetterDPI/releases/download/V0.4.3/BetterDPI-openwrt-24.10-all.ipk) |
+| 25.12 | [APK](https://github.com/Or1a/BetterDPI/releases/download/V0.4.3/BetterDPI-openwrt-25.12-all.apk) |
 
-V0.4.0 / V0.4.1 用户需手动下载同一发布页的包和 `SHA256SUMS`，按[试用版安装说明](INSTALL.md#v042-试用版)覆盖安装，无需先卸载。升级后强制刷新 LuCI；旧分钟漏记不会凭空补回，保留的历史统计不会重复计入。
-
-Anti-PCDN 默认关闭，已有设置保留。首次试用打开 **状态 → Anti-PCDN**，选择实际 LAN 接口并开启「仅观察」；保持 DPI 采集运行，等上传连接获得完整 5 分钟观察窗口后查看评分与覆盖。跨端口设备分仅用于观察，不会直接封整台设备；自动处置仍要求具体连接达到阈值并通过所有保护检查，默认 **80 分、120 秒**。试用参数尚未经过真实业务准确率校准。
-
-V0.4.2 fixes upload-window starvation, recovers missing identities without replaying traffic, scopes known gaps, and adds observation-only device scores across ports. It also fixes omitted minute uploads on long-lived TCP flows and improves the UI. Trial packages use the tag-specific links above; the stable updater remains on V0.3.2. Real-router detection accuracy and long-term load still require validation.
+V0.4.3 adds connection-level drop diagnostics and earlier detection of uploads spread across peers and ports. WAN accounting recognizes Tailscale and ZeroTier in new and retained records. Choose the package for your OpenWrt series. [Installation guide](INSTALL.md)
 
 ## Features
 
@@ -57,33 +49,27 @@ V0.4.2 fixes upload-window starvation, recovers missing identities without repla
 - 查看采集状态与排查建议，区分应用未识别和未能计入设备统计的流量。
 - 在页面手动检查 GitHub 新版本，确认后校验、安装，并查看升级结果。
 
-The stable [V0.3.2 release](https://github.com/Or1a/BetterDPI/releases/tag/V0.3.2) includes the traffic-analysis features listed above. V0.3.0 / V0.3.1 users can use the update button; earlier installations need one manual upgrade. Both stable packages were built with their matching official SDK and verified against the tagged source; router upgrade and long-term validation remain pending.
-
-上述流量分析功能已纳入稳定版 [V0.3.2 Release](https://github.com/Or1a/BetterDPI/releases/tag/V0.3.2)。V0.3.0 / V0.3.1 可通过页面升级，更早版本先手动覆盖安装一次。两种稳定版包均已由对应官方 SDK 构建，发布附件已核对通过；真实路由器升级与长期验证仍待完成。
-
-Fixed download filenames and an in-app update manifest are available. See the [GitHub installation guide](INSTALL.md) for direct IPK installation, APK download-and-install, and checksum verification.
-
-现在提供固定名称下载链接和应用内更新清单。通过 GitHub 安装 IPK、下载后安装 APK 及校验方法见[便捷安装说明](INSTALL.md)。
-
 ## Command-line download
 
-These commands download the stable V0.3.2 packages. Run the command matching your router's OpenWrt version. It downloads the package to `/tmp` and verifies its SHA-256 checksum; it does not install anything. For the V0.4.2 trial, use the tag-specific links above and the [trial installation steps](INSTALL.md#v042-试用版).
+Choose the file for your router. For OpenWrt 24.10 use `BetterDPI-openwrt-24.10-all.ipk`. For OpenWrt 25.12 use `BetterDPI-openwrt-25.12-all.apk`. This downloads the file and verifies its SHA-256 checksum against the same release.
 
-OpenWrt 24.10.8 (IPK):
-
-```sh
-wget -O /tmp/BetterDPI-0.3.2-openwrt-24.10.8-all.ipk 'https://github.com/Or1a/BetterDPI/releases/download/V0.3.2/BetterDPI-0.3.2-openwrt-24.10.8-all.ipk' && echo 'a96752bf78934fc43f8d55257a926c2cdc2d627ade00af0f711f06d2b3e1d591  /tmp/BetterDPI-0.3.2-openwrt-24.10.8-all.ipk' | sha256sum -c -
-```
-
-OpenWrt 25.12.5 (APK):
+选择与你的 OpenWrt 系列匹配的包名。以下命令校验通过后将安装包保存到 `/tmp`。
 
 ```sh
-wget -O /tmp/BetterDPI-0.3.2-openwrt-25.12.5-all.apk 'https://github.com/Or1a/BetterDPI/releases/download/V0.3.2/BetterDPI-0.3.2-openwrt-25.12.5-all.apk' && echo 'eaa2433bf0b7c24d6adfe8cf3cd8bf5247fc595e732af92e79c80e38ea17a41d  /tmp/BetterDPI-0.3.2-openwrt-25.12.5-all.apk' | sha256sum -c -
+(
+    set -eu
+    betterdpi_package='BetterDPI-openwrt-25.12-all.apk'
+    betterdpi_release='https://github.com/Or1a/BetterDPI/releases/download/V0.4.3'
+    betterdpi_tmp=$(mktemp -d /tmp/betterdpi-download.XXXXXX)
+    trap 'rm -rf "$betterdpi_tmp"' EXIT
+    cd "$betterdpi_tmp"
+    wget -O "$betterdpi_package" "$betterdpi_release/$betterdpi_package"
+    wget -O SHA256SUMS "$betterdpi_release/SHA256SUMS"
+    awk -v name="$betterdpi_package" '$2 == name { print; n++ } END { exit(n != 1) }' SHA256SUMS > package.sha256
+    sha256sum -c package.sha256
+    mv "$betterdpi_package" "/tmp/$betterdpi_package"
+)
 ```
-
-## 命令行下载
-
-上方命令用于稳定版 V0.3.2。在对应版本的 OpenWrt 路由器上运行一条命令，安装包会下载到 `/tmp` 并校验 SHA-256；命令不会自动安装。V0.4.2 请使用前面的试用链接及[对应安装步骤](INSTALL.md#v042-试用版)。
 
 ## Installation
 
@@ -92,13 +78,13 @@ Connect to the router over SSH as `root`. After downloading and verifying the ma
 OpenWrt 24.10.8 (IPK):
 
 ```sh
-opkg update && opkg install /tmp/BetterDPI-0.3.2-openwrt-24.10.8-all.ipk
+opkg update && opkg install /tmp/BetterDPI-openwrt-24.10-all.ipk
 ```
 
 OpenWrt 25.12.5 (APK):
 
 ```sh
-apk update && apk add --allow-untrusted /tmp/BetterDPI-0.3.2-openwrt-25.12.5-all.apk
+apk update && apk add --allow-untrusted /tmp/BetterDPI-openwrt-25.12-all.apk
 ```
 
 The package is named `luci-app-netify-stats` internally. Its dependencies include `netifyd`, `python3`, `python3-sqlite3`, `python3-urllib`, `python3-openssl`, `ca-bundle`, `luci-base`, and `rpcd`; the package manager resolves them from the configured feeds.
@@ -148,13 +134,13 @@ See the [detailed documentation](netify-stats/README.md) for storage settings an
 OpenWrt 24.10.8（IPK）：
 
 ```sh
-opkg update && opkg install /tmp/BetterDPI-0.3.2-openwrt-24.10.8-all.ipk
+opkg update && opkg install /tmp/BetterDPI-openwrt-24.10-all.ipk
 ```
 
 OpenWrt 25.12.5（APK）：
 
 ```sh
-apk update && apk add --allow-untrusted /tmp/BetterDPI-0.3.2-openwrt-25.12.5-all.apk
+apk update && apk add --allow-untrusted /tmp/BetterDPI-openwrt-25.12-all.apk
 ```
 
 软件包内部名称为 `luci-app-netify-stats`，依赖包括 `netifyd`、`python3`、`python3-sqlite3`、`python3-urllib`、`python3-openssl`、`ca-bundle`、`luci-base` 和 `rpcd`；包管理器会从已配置的软件源解析这些依赖。

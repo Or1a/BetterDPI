@@ -4,6 +4,11 @@ on:
   push:
     tags: ['V*']
   workflow_dispatch:
+    inputs:
+      publish_version:
+        description: 'Package version to publish from the default branch (leave empty to build only)'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -28,6 +33,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Check source and regressions
+        env:
+          PUBLISH_VERSION: ${{ inputs.publish_version }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           python3 netify-stats/packaging/check_preparation.py
           package_version=$(sed -n 's/^PKG_VERSION:=//p' netify-stats/Makefile)
@@ -35,8 +43,12 @@ jobs:
             echo 'Release tag must match PKG_VERSION in netify-stats/Makefile.' >&2
             exit 1
           fi
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
-            python3 netify-stats/packaging/build_update_manifest.py --version "$package_version" --tag "$GITHUB_REF_NAME" --check-version
+          if [ -n "$PUBLISH_VERSION" ]; then
+            test "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH"
+            test "$PUBLISH_VERSION" = "$package_version"
+          fi
+          if [ "$GITHUB_REF_TYPE" = tag ] || [ -n "$PUBLISH_VERSION" ]; then
+            python3 netify-stats/packaging/build_update_manifest.py --version "$package_version" --tag "V$package_version" --check-version
           fi
           python3 -m unittest discover -s netify-stats -p 'test_*.py'
           python3 netify-stats/reproduce_late_original.py
@@ -83,7 +95,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/V')
+    if: startsWith(github.ref, 'refs/tags/V') || (github.event_name == 'workflow_dispatch' && inputs.publish_version != '' && github.ref_name == github.event.repository.default_branch)
     needs: package
     runs-on: ubuntu-24.04
     permissions:
@@ -101,15 +113,21 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           package_version=$(sed -n 's/^PKG_VERSION:=//p' netify-stats/Makefile)
-          test "$GITHUB_REF_NAME" = "V$package_version"
-          python3 netify-stats/packaging/build_update_manifest.py --release-dir release --version "$package_version" --tag "$GITHUB_REF_NAME"
+          tag="V$package_version"
+          source_sha=$(git rev-parse HEAD)
+          python3 netify-stats/packaging/build_update_manifest.py --release-dir release --version "$package_version" --tag "$tag"
+          if [ "$GITHUB_REF_TYPE" = branch ] && ! git ls-remote --exit-code --refs origin "refs/tags/$tag" >/dev/null; then
+            gh api --method POST "repos/$GH_REPO/git/refs" -f "ref=refs/tags/$tag" -f "sha=$source_sha" >/dev/null
+          fi
+          test "$(gh api "repos/$GH_REPO/commits/$tag" --jq .sha)" = "$source_sha"
           cd release
           sha256sum BetterDPI-* update.json > SHA256SUMS
-          gh release create "${GITHUB_REF_NAME}" BetterDPI-* update.json SHA256SUMS \
-            --prerelease \
-            --title "${GITHUB_REF_NAME}" \
+          gh release create "$tag" BetterDPI-* update.json SHA256SUMS \
+            --verify-tag --latest \
+            --title "BetterDPI $tag" \
             --notes-file "$GITHUB_WORKSPACE/RELEASE-NOTES.md"
-          assets=$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name')
+          test "$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)" = "$tag"
+          assets=$(gh release view "$tag" --json assets --jq '.assets[].name')
           test "$(printf '%s\n' "$assets" | wc -l)" -eq 6
           printf '%s\n' "$assets" | grep -Fx "BetterDPI-$package_version-openwrt-24.10.8-all.ipk"
           printf '%s\n' "$assets" | grep -Fx "BetterDPI-$package_version-openwrt-25.12.5-all.apk"
